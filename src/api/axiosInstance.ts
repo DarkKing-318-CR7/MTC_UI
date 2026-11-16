@@ -19,6 +19,13 @@ const axiosInstance = axios.create({
 let refreshPromise: Promise<string> | null = null;
 
 axiosInstance.interceptors.request.use((config) => {
+  // The shared default is JSON. Mark FormData as multipart so Axios preserves
+  // the binary body; its browser adapter removes this header before sending,
+  // allowing the browser to add the required boundary.
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    config.headers.set("Content-Type", "multipart/form-data");
+  }
+
   const accessToken = authStorage.getAccessToken();
 
   if (accessToken) {

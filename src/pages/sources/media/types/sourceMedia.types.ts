@@ -21,6 +21,15 @@ export interface MediaResolutionItem {
 
 // Dữ liệu media của nguồn thông tin
 export interface SourceMediaItem extends MediaItem {
+  categoryId?: string | null;
+  facilityId?: string;
+  organizationId?: string;
+  sourceType?: number;
+  frequencyHz?: number | null;
+  hlsProcessingStatus?: string;
+  hlsPlaybackUrl?: string | null;
+  approvedAt?: string | null;
+  sharedFacilityNames?: string[];
   fileName: string;
   contentType?: SourceMediaContentType;
   duration: string;

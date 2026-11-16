@@ -4,6 +4,7 @@ import { Play } from "lucide-react";
 import type { MediaApiItem } from "../../../api/mediaApi";
 import AppStatusTag from "../../common/AppStatusTag";
 import type { AppStatusVariant } from "../../common/AppStatusTag";
+import AuthenticatedHlsPlayer from "../AuthenticatedHlsPlayer/AuthenticatedHlsPlayer";
 
 import "./MediaOverview.css";
 
@@ -12,6 +13,7 @@ import "./MediaOverview.css";
  * Trang Source chuyển dữ liệu từ store sang kiểu này trước khi truyền vào.
  */
 export interface MediaOverviewDisplay {
+  mediaId?: string;
   name: string;
   url?: string | null;
   fileType?: string | null;
@@ -25,7 +27,11 @@ export interface MediaOverviewDisplay {
   createdBy?: string | null;
   createdAt?: string | null;
   approvedBy?: string | null;
+  approvedAt?: string | null;
   sharedArea?: string | null;
+  hlsProcessingStatus?: string | null;
+  hlsPlaybackUrl?: string | null;
+  sourceType?: number;
 }
 
 interface MediaOverviewProps {
@@ -68,18 +74,25 @@ function normalizeMedia(
   if (!isApiMedia(media)) return media;
 
   return {
+    mediaId: media.id,
     name: media.mediaName,
     url: media.url || media.sourceUrl || "",
     fileType: media.fileType,
     durationLabel: formatDuration(media.durationSeconds),
     sizeLabel: formatSize(media.fileSize),
     approvalStatus: media.approvalStatus,
+    hlsProcessingStatus: media.hlsProcessingStatus,
+    hlsPlaybackUrl: media.hlsPlaybackUrl,
+    sourceType: media.sourceType,
     rejectionReason: media.rejectionReason,
     category: media.categoryId || "Chưa có thông tin",
     attachmentOrLink:
       media.fileName || media.url || media.sourceUrl || "Chưa có",
-    createdBy: media.createdBy,
+    createdBy: media.createdByName ?? "",
     createdAt: media.createdAt,
+    approvedBy: media.approvedByName,
+    approvedAt: media.approvedAt,
+    sharedArea: media.sharedFacilityNames.join(", "),
   };
 }
 
@@ -108,7 +121,15 @@ function MediaOverview({ media }: MediaOverviewProps) {
     <div className="media-overview">
       <div className="media-overview__main">
         <div className="media-overview__preview">
-          {mediaUrl && isVideo ? (
+          {info.sourceType === 0 && (isVideo || isAudio) && info.hlsProcessingStatus ? (
+            <AuthenticatedHlsPlayer
+              mediaId={info.mediaId || info.name}
+              mediaType={isAudio ? "audio" : "video"}
+              approvalStatus={info.approvalStatus || ""}
+              processingStatus={info.hlsProcessingStatus}
+              playbackUrl={info.hlsPlaybackUrl}
+            />
+          ) : mediaUrl && isVideo ? (
             <video src={mediaUrl} controls preload="metadata" />
           ) : mediaUrl && isImage ? (
             <img src={mediaUrl} alt={info.name} />
@@ -146,6 +167,11 @@ function MediaOverview({ media }: MediaOverviewProps) {
                 label={info.approvalStatus || "Chưa xác định"}
               />
             </div>
+            {info.hlsProcessingStatus && (
+              <div className="media-overview__reason">
+                HLS processing: {info.hlsProcessingStatus}
+              </div>
+            )}
             {info.rejectionReason && (
               <div className="media-overview__reason">
                 Lý do từ chối: {info.rejectionReason}
@@ -156,6 +182,12 @@ function MediaOverview({ media }: MediaOverviewProps) {
       </div>
 
       <div className="media-overview__information">
+        {info.approvedAt && (
+          <div className="media-overview__info-item">
+            <strong>Approval time:</strong>
+            <span>{dayjs(info.approvedAt).isValid() ? dayjs(info.approvedAt).format("DD/MM/YYYY HH:mm:ss") : "—"}</span>
+          </div>
+        )}
         <div className="media-overview__info-item">
           <strong>Lĩnh vực:</strong>
           <span>{info.category || "Chưa có thông tin"}</span>
@@ -184,12 +216,10 @@ function MediaOverview({ media }: MediaOverviewProps) {
               : "-"}
           </span>
         </div>
-        {info.sharedArea && (
-          <div className="media-overview__info-item">
+        <div className="media-overview__info-item">
             <strong>Khu vực chia sẻ:</strong>
-            <span>{info.sharedArea}</span>
-          </div>
-        )}
+            <span>{info.sharedArea || "—"}</span>
+        </div>
       </div>
     </div>
   );

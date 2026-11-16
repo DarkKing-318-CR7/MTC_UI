@@ -18,7 +18,6 @@ import type {
 } from "../MediaActionMenu/MediaActionMenu";
 
 import type { MediaItem } from "../../../types/media.types";
-
 import "./MediaCard.css";
 
 export interface MediaCardProps<T extends MediaItem = MediaItem> {
@@ -38,6 +37,7 @@ export interface MediaCardProps<T extends MediaItem = MediaItem> {
   onCreateNews?: (media: T) => void;
   onCreatePlaylist?: (media: T) => void;
   onCreateTemplate?: (media: T) => void;
+  processingStatus?: string;
 }
 
 const mediaStatusConfig = {
@@ -76,6 +76,7 @@ function MediaCard<T extends MediaItem>({
   onCreateNews,
   onCreatePlaylist,
   onCreateTemplate,
+  processingStatus,
 }: MediaCardProps<T>) {
   const [imageError, setImageError] = useState(false);
 
@@ -260,6 +261,9 @@ function MediaCard<T extends MediaItem>({
             <span className="media-card__date-label">Ngày tạo:</span>{" "}
             <span>{formattedDate}</span>
           </p>
+          {processingStatus && (
+            <p className="media-card__date">HLS: {processingStatus}</p>
+          )}
         </div>
 
         {visibleActions.length > 0 && (

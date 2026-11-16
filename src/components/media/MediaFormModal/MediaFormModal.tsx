@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { Form, Input, Upload, message } from "antd";
+import { Form, Input, Upload, message, Progress } from "antd";
 import type { UploadProps } from "antd";
 import { Trash2, UploadCloud } from "lucide-react";
 
 import AppModal from "../../common/AppModal";
 import AppButton from "../../common/AppButton";
 import AppSelect from "../../common/AppSelect";
-
 import "./MediaFormModal.css";
 
 export type MediaContentType = "file" | "url" | "live" | "frequency";
@@ -27,6 +26,8 @@ export interface MediaFormInitialValues {
   type?: "image" | "audio" | "video";
   fileName?: string;
   sizeMB?: number;
+  categoryId?: string | null;
+  description?: string;
 }
 
 export interface MediaFormValues {
@@ -36,6 +37,12 @@ export interface MediaFormValues {
   contentValue?: string;
   file?: File | null;
   fileType?: MediaFileType;
+  description?: string;
+}
+
+export interface MediaCategoryOption {
+  id: string;
+  name: string;
 }
 
 interface MediaFormModalProps {
@@ -43,7 +50,9 @@ interface MediaFormModalProps {
   mode?: "create" | "edit";
   initialValues?: MediaFormInitialValues | null;
   categories: string[];
+  categoryOptions?: MediaCategoryOption[];
   loading?: boolean;
+  uploadProgress?: number | null;
   onCancel: () => void;
   onSubmit: (values: MediaFormValues) => void | Promise<void>;
 }
@@ -57,7 +66,7 @@ interface Fields {
   description?: string;
 }
 
-const MAX_MB = 200;
+const MAX_MB = 1024;
 
 const fileTypes = [
   { label: "Hình ảnh", value: "Image" },
@@ -70,7 +79,9 @@ function MediaFormModal({
   mode = "create",
   initialValues,
   categories,
+  categoryOptions,
   loading = false,
+  uploadProgress = null,
   onCancel,
   onSubmit,
 }: MediaFormModalProps) {
@@ -108,7 +119,10 @@ function MediaFormModal({
 
     form.setFieldsValue({
       title: isEdit ? (initialValues?.title ?? "") : "",
-      category: isEdit ? (initialValues?.category ?? "") : "",
+      category: isEdit
+        ? (initialValues?.categoryId ?? initialValues?.category ?? "")
+        : "",
+      description: isEdit ? (initialValues?.description ?? "") : "",
       contentType: type,
       fileType,
       contentValue: isEdit
@@ -160,12 +174,7 @@ function MediaFormModal({
   const handleFinish = async (values: Fields) => {
     const type = isEdit ? (initialValues?.contentType ?? "file") : contentType;
 
-    if (isEdit && type === "file") {
-      message.warning("Chức năng cập nhật file đang chờ API upload.");
-      return;
-    }
-
-    if (type === "file" && !selectedFile) {
+    if (type === "file" && !isEdit && !selectedFile) {
       message.error("Vui lòng chọn file media");
       return;
     }
@@ -206,9 +215,10 @@ function MediaFormModal({
         contentValue: type === "file" ? undefined : contentValue,
         file: selectedFile,
         fileType: type === "url" ? values.fileType : undefined,
+        description: values.description?.trim(),
       });
-    } catch (error) {
-      console.error("Lỗi khi lưu Media:", error);
+    } catch {
+      // The parent surfaces API failures without logging request configuration or tokens.
     }
   };
 
@@ -281,10 +291,12 @@ function MediaFormModal({
               <AppSelect
                 width="100%"
                 placeholder="Chọn lĩnh vực"
-                options={categories.map((category) => ({
-                  label: category,
-                  value: category,
-                }))}
+                options={categoryOptions?.length
+                  ? categoryOptions.map((category) => ({
+                      label: category.name,
+                      value: category.id,
+                    }))
+                  : categories.map((category) => ({ label: category, value: category }))}
               />
             </Form.Item>
 
@@ -452,6 +464,9 @@ function MediaFormModal({
                     Thay tệp cần API upload từ Backend.
                   </p>
                 )}
+                {uploadProgress !== null && (
+                  <Progress percent={uploadProgress} status="active" />
+                )}
               </div>
             )}
 
@@ -528,7 +543,7 @@ function MediaFormModal({
             height={44}
             htmlType="submit"
             loading={loading}
-            disabled={isEdit && contentType === "file"}>
+            disabled={false}>
             {isEdit ? "Lưu" : "Tiếp tục"}
           </AppButton>
         </div>

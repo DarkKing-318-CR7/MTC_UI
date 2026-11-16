@@ -11,6 +11,11 @@ export interface MediaCategoryApiItem {
   updatedAt: string | null;
 }
 
+export interface MediaCategoryRequest {
+  categoryName: string;
+  description?: string | null;
+}
+
 type MediaCategoryListResponse = ApiResponse<MediaCategoryApiItem[]>;
 type MediaCategoryDetailResponse = ApiResponse<MediaCategoryApiItem>;
 
@@ -38,6 +43,31 @@ const mediaCategoryApi = {
     );
 
     return checkResult(response.data);
+  },
+  create: async (payload: MediaCategoryRequest): Promise<MediaCategoryApiItem> => {
+    const response = await axiosInstance.post<MediaCategoryDetailResponse>(
+      "/media-categories",
+      payload,
+    );
+    return checkResult(response.data);
+  },
+  update: async (
+    id: string,
+    payload: MediaCategoryRequest,
+  ): Promise<MediaCategoryApiItem> => {
+    const response = await axiosInstance.put<MediaCategoryDetailResponse>(
+      `/media-categories/${encodeURIComponent(id)}`,
+      payload,
+    );
+    return checkResult(response.data);
+  },
+  delete: async (id: string): Promise<void> => {
+    const response = await axiosInstance.delete<ApiResponse<unknown>>(
+      `/media-categories/${encodeURIComponent(id)}`,
+    );
+    if (!response.data.success) {
+      throw new Error(response.data.message || "Unable to delete media category.");
+    }
   },
 };
 

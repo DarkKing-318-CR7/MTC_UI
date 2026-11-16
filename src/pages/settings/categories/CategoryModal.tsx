@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Form } from "antd";
+import { Form, Input } from "antd";
 import { CircleAlert } from "lucide-react";
 
 import AppModal from "../../../components/common/AppModal";
@@ -18,7 +18,7 @@ interface CategoryModalProps {
   mode: CategoryModalMode;
   category: Category | null;
   categories: Category[];
-  onSave: (values: CategoryFormValues) => void;
+  onSave: (values: CategoryFormValues) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -37,20 +37,20 @@ function CategoryModal({
   onCancel,
 }: CategoryModalProps) {
   const [form] = Form.useForm<CategoryFormValues>();
-  const codeValue = Form.useWatch("code", form);
+  const nameValue = Form.useWatch("name", form);
 
   const isViewMode = mode === "view";
 
-  const normalizedCode = String(codeValue ?? "")
+  const normalizedName = String(nameValue ?? "")
     .trim()
     .toLowerCase();
 
-  const isDuplicateCode =
+  const isDuplicateName =
     !isViewMode &&
-    normalizedCode.length > 0 &&
+    normalizedName.length > 0 &&
     categories.some(
       (item) =>
-        item.code.trim().toLowerCase() === normalizedCode &&
+        item.name.trim().toLowerCase() === normalizedName &&
         item.id !== category?.id,
     );
 
@@ -61,8 +61,8 @@ function CategoryModal({
 
     if (category) {
       form.setFieldsValue({
-        code: category.code,
         name: category.name,
+        description: category.description ?? "",
       });
     }
   }, [open, category, form]);
@@ -71,26 +71,26 @@ function CategoryModal({
     try {
       const values = await form.validateFields();
 
-      const code = values.code.trim();
       const name = values.name.trim();
+      const description = values.description?.trim() ?? "";
 
       const duplicate = categories.some(
         (item) =>
-          item.code.trim().toLowerCase() === code.toLowerCase() &&
+          item.name.trim().toLowerCase() === name.toLowerCase() &&
           item.id !== category?.id,
       );
 
       if (duplicate) {
         form.setFields([
           {
-            name: "code",
-            errors: ["Mã lĩnh vực đã tồn tại trên hệ thống"],
+            name: "name",
+            errors: ["Tên lĩnh vực đã tồn tại trên hệ thống"],
           },
         ]);
         return;
       }
 
-      onSave({ code, name });
+      await onSave({ name, description });
     } catch {
       return;
     }
@@ -142,57 +142,6 @@ function CategoryModal({
         requiredMark={!isViewMode}
         className="category-modal__form">
         <Form.Item
-          name="code"
-          label="Mã lĩnh vực"
-          rules={
-            isViewMode
-              ? []
-              : [
-                  {
-                    required: true,
-                    whitespace: true,
-                    message: "Vui lòng nhập mã lĩnh vực",
-                  },
-                  {
-                    max: 50,
-                    message: "Mã lĩnh vực tối đa 50 ký tự",
-                  },
-                  {
-                    validator: async (_, value: string | undefined) => {
-                      const code = value?.trim().toLowerCase();
-
-                      if (!code) return;
-
-                      const exists = categories.some(
-                        (item) =>
-                          item.code.trim().toLowerCase() === code &&
-                          item.id !== category?.id,
-                      );
-
-                      if (exists) {
-                        throw new Error("Mã lĩnh vực đã tồn tại trên hệ thống");
-                      }
-                    },
-                  },
-                ]
-          }
-          help={
-            isDuplicateCode ? (
-              <div className="category-modal__duplicate">
-                <CircleAlert size={20} />
-                <span>Mã lĩnh vực đã tồn tại trên hệ thống</span>
-              </div>
-            ) : undefined
-          }
-          validateStatus={isDuplicateCode ? "warning" : undefined}>
-          <AppInput
-            width="100%"
-            placeholder="Nhập mã lĩnh vực"
-            readOnly={isViewMode}
-          />
-        </Form.Item>
-
-        <Form.Item
           name="name"
           label="Tên lĩnh vực"
           rules={
@@ -205,16 +154,58 @@ function CategoryModal({
                     message: "Vui lòng nhập tên lĩnh vực",
                   },
                   {
-                    max: 200,
-                    message: "Tên lĩnh vực tối đa 200 ký tự",
+                    max: 255,
+                    message: "Tên lĩnh vực tối đa 255 ký tự",
+                  },
+                  {
+                    validator: async (_, value: string | undefined) => {
+                      const name = value?.trim().toLowerCase();
+
+                      if (!name) return;
+
+                      const exists = categories.some(
+                        (item) =>
+                          item.name.trim().toLowerCase() === name &&
+                          item.id !== category?.id,
+                      );
+
+                      if (exists) {
+                        throw new Error("Tên lĩnh vực đã tồn tại trên hệ thống");
+                      }
+                    },
+                  },
+                ]
+          }
+          help={
+            isDuplicateName ? (
+              <div className="category-modal__duplicate">
+                <CircleAlert size={20} />
+                <span>Tên lĩnh vực đã tồn tại trên hệ thống</span>
+              </div>
+            ) : undefined
+          }
+          validateStatus={isDuplicateName ? "warning" : undefined}>
+          <AppInput
+            width="100%"
+            placeholder="Nhập tên lĩnh vực"
+            readOnly={isViewMode}
+          />
+        </Form.Item>
+
+        <Form.Item
+          name="description"
+          label="Mô tả"
+          rules={
+            isViewMode
+              ? []
+              : [
+                  {
+                    max: 500,
+                    message: "Mô tả tối đa 500 ký tự",
                   },
                 ]
           }>
-          <AppInput
-            width="100%"
-            placeholder="Nhập nhóm chức năng"
-            readOnly={isViewMode}
-          />
+          <Input.TextArea rows={4} maxLength={500} readOnly={isViewMode} />
         </Form.Item>
       </AppForm>
 

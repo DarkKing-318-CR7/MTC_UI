@@ -22,6 +22,11 @@ export interface FacilityMediaItem extends MediaItem {
   durationSeconds?: number | null;
   frequencyHz?: number | null;
   approvalStatus?: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  sharedArea?: string;
+  hlsProcessingStatus?: string;
+  hlsPlaybackUrl?: string | null;
 }
 
 export interface FacilityMediaFormValues {

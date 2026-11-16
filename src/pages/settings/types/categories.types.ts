@@ -1,7 +1,11 @@
 export interface Category {
-  id: number;
-  code: string;
+  id: string;
   name: string;
+  description: string | null;
+  isDefault: boolean;
 }
 
-export type CategoryFormValues = Omit<Category, "id">;
+export interface CategoryFormValues {
+  name: string;
+  description?: string;
+}

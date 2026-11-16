@@ -2,6 +2,7 @@ import { useState } from "react";
 import { FolderRoot, Play, X } from "lucide-react";
 
 import type { MediaItem } from "../../../types/media.types";
+import AuthenticatedHlsPlayer from "../AuthenticatedHlsPlayer/AuthenticatedHlsPlayer";
 
 import "./MediaPreview.css";
 
@@ -11,6 +12,10 @@ export interface MediaPreviewItem extends MediaItem {
   fileName?: string | null;
   approvedBy?: string | null;
   sharedLocations?: string | null;
+  hlsProcessingStatus?: string;
+  hlsPlaybackUrl?: string | null;
+  sourceType?: number;
+  approvedAt?: string | null;
 }
 
 interface MediaPreviewProps<T extends MediaPreviewItem> {
@@ -110,7 +115,15 @@ function MediaPreview<T extends MediaPreviewItem>({
       <div className="media-preview__top">
         <div className="media-preview__main">
           <div className="media-preview__thumbnail">
-            {showThumbnail ? (
+            {media.sourceType === 0 && (isVideo || isAudio) && media.hlsProcessingStatus ? (
+              <AuthenticatedHlsPlayer
+                mediaId={media.id}
+                mediaType={isAudio ? "audio" : "video"}
+                approvalStatus={media.status}
+                processingStatus={media.hlsProcessingStatus}
+                playbackUrl={media.hlsPlaybackUrl}
+              />
+            ) : showThumbnail ? (
               <img
                 key={thumbnail}
                 src={thumbnail}
@@ -123,7 +136,7 @@ function MediaPreview<T extends MediaPreviewItem>({
               </div>
             )}
 
-            {(isVideo || isAudio) && (
+            {(isVideo || isAudio) && !(media.sourceType === 0 && media.hlsProcessingStatus) && (
               <button
                 type="button"
                 className="media-preview__play"
@@ -186,6 +199,12 @@ function MediaPreview<T extends MediaPreviewItem>({
       <div className="media-preview__divider" />
 
       <div className="media-preview__details">
+        {media.approvedAt && (
+          <div className="media-preview__field">
+            <span className="media-preview__label">Approval time:</span>
+            <span className="media-preview__value">{formatDate(media.approvedAt)}</span>
+          </div>
+        )}
         <div className="media-preview__field">
           <span className="media-preview__label">Lĩnh vực:</span>
           <span className="media-preview__value">{media.category || "—"}</span>

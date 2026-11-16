@@ -9,6 +9,8 @@ import {
 import type { ReactNode } from "react";
 
 import { facilityApi } from "../api/facilityApi";
+import { authApi } from "../api/authApi";
+import { authStorage } from "../utils/authStorage";
 
 import type { Facility as ApiFacility } from "../types/facility.types";
 import type { Facility } from "../pages/facilities/types/facility.types";
@@ -18,8 +20,6 @@ import {
   findFacilityPath,
 } from "../pages/facilities/utils/facility.utils";
 
-// ID tổ chức dùng để kiểm thử, thay bằng Auth khi tích hợp đăng nhập.
-const ORGANIZATION_ID = "94edb2c4-12d3-4ac2-b637-a39a82e0f589";
 
 interface FacilityContextType {
   facilities: Facility[];
@@ -92,7 +92,11 @@ export function FacilityProvider({ children }: FacilityProviderProps) {
       setLoading(true);
       setError(null);
 
-      const response = await facilityApi.getByOrganization(ORGANIZATION_ID);
+      const user = await authApi.getMe();
+      if (!user.organizationId) {
+        throw new Error("Tài khoản hiện tại chưa được gán tổ chức.");
+      }
+      const response = await facilityApi.getByOrganization(user.organizationId);
 
       if (!response.success) {
         throw new Error(response.message || "Không thể tải danh sách cơ sở");
@@ -110,6 +114,10 @@ export function FacilityProvider({ children }: FacilityProviderProps) {
       setSelectedFacilityId((currentId) => {
         if (currentId && findFacilityById(facilityTree, currentId)) {
           return currentId;
+        }
+
+        if (user.facilityId && findFacilityById(facilityTree, user.facilityId)) {
+          return user.facilityId;
         }
 
         return facilityTree[0]?.id ?? null;
@@ -132,6 +140,19 @@ export function FacilityProvider({ children }: FacilityProviderProps) {
     void refreshFacilities().catch(() => {
       // Lỗi đã được lưu trong state error.
     });
+  }, [refreshFacilities]);
+
+  useEffect(() => {
+    const onAuthChanged = () => {
+      if (authStorage.isAuthenticated()) {
+        void refreshFacilities().catch(() => undefined);
+      } else {
+        setFacilities([]);
+        setSelectedFacilityId(null);
+      }
+    };
+    window.addEventListener("mtc-auth-changed", onAuthChanged);
+    return () => window.removeEventListener("mtc-auth-changed", onAuthChanged);
   }, [refreshFacilities]);
 
   const selectedFacility = useMemo(() => {

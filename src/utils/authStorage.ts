@@ -13,11 +13,13 @@ export const authStorage = {
   setTokens: (accessToken: string, refreshToken: string): void => {
     sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
     sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+    window.dispatchEvent(new Event("mtc-auth-changed"));
   },
 
   clearTokens: (): void => {
     sessionStorage.removeItem(ACCESS_TOKEN_KEY);
     sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+    window.dispatchEvent(new Event("mtc-auth-changed"));
   },
 
   isAuthenticated: (): boolean => {

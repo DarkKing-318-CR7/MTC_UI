@@ -107,7 +107,12 @@ export function mapMediaToFacilityItem(
     sourceStatus: "active",
 
     createdAt: media.createdAt,
-    createdBy: media.createdBy ?? "Không xác định",
+    approvedBy: media.approvedByName,
+    approvedAt: media.approvedAt,
+    sharedArea: media.sharedFacilityNames?.join(", ") ?? "",
+    hlsProcessingStatus: media.hlsProcessingStatus,
+    hlsPlaybackUrl: media.hlsPlaybackUrl,
+    createdBy: media.createdByName ?? "Không xác định",
 
     // Backend lưu dung lượng theo bytes.
     sizeMB: Number(((media.fileSize ?? 0) / (1024 * 1024)).toFixed(2)),

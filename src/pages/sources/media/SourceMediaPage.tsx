@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Form, message } from "antd";
+import { Form, message, Spin } from "antd";
 import dayjs from "dayjs";
 import {
-  AlertTriangle,
   FileCheckCorner,
   FileX2,
-  HardDrive,
   Plus,
   RefreshCw,
-  Trash2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import AppConfirmModal from "../../../components/common/AppConfirmModal";
 import AppDateRangePicker from "../../../components/common/AppDateRangePicker";
 import type { DateRangeValue } from "../../../components/common/AppDateRangePicker";
@@ -23,20 +21,18 @@ import AppSearch from "../../../components/common/AppSearch";
 import AppSelect from "../../../components/common/AppSelect";
 import { ROUTES } from "../../../constants/route.constants";
 import { useActionPanel } from "../../../contexts/ActionPanelContext";
+import { useFacilityContext } from "../../../contexts/FacilityContext";
+import { authApi } from "../../../api/authApi";
+import mediaApi, { getUploadChunkRanges, type MediaApiItem } from "../../../api/mediaApi";
+import mediaCategoryApi, { type MediaCategoryApiItem } from "../../../api/mediaCategoryApi";
 import SourceNavigationTabs from "../components/SourceNavigationTabs";
 import MediaCard from "../../../components/media/MediaCard/MediaCard";
 import MediaFormModal from "../../../components/media/MediaFormModal/MediaFormModal";
 import type { MediaFormValues } from "../../../components/media/MediaFormModal/MediaFormModal";
-import SourceMediaPlayerModal from "./components/SourceMediaPlayerModal";
 import MediaPreview from "../../../components/media/MediaPreview/MediaPreview";
 import MediaRejectModal from "../../../components/media/MediaRejectModal/MediaRejectModal";
-import SourceMediaShareModal from "./components/SourceMediaShareModal";
-import { DEFAULT_MEDIA_THUMBNAIL } from "./data/sourceMedia.mock";
-import { useSourceMediaStore } from "./data/sourceMedia.store";
-import type {
-  SourceMediaItem,
-  SourceMediaType,
-} from "./types/sourceMedia.types";
+import { mapMediaItem } from "./data/sourceMediaApiMapper";
+import type { SourceMediaItem } from "./types/sourceMedia.types";
 import "./SourceMediaPage.css";
 const PAGE_SIZE = 12;
 const MEDIA_TYPE_OPTIONS = [
@@ -52,31 +48,6 @@ const APPROVAL_STATUS_OPTIONS = [
   { label: "Đang xử lý", value: "processing" },
   { label: "Từ chối duyệt", value: "rejected" },
 ];
-const SHARE_FACILITY_NAME_MAP: Record<string, string> = {
-  "quan-1": "Quận 1",
-  "quan-2": "Quận 2",
-  "quan-3": "Quận 3",
-  "quan-4": "Quận 4",
-  "quan-5": "Quận 5",
-  "quan-6": "Quận 6",
-  "tan-binh": "Quận Tân Bình",
-  "binh-thanh": "Quận Bình Thạnh",
-};
-function inferMediaType(values: MediaFormValues): SourceMediaType {
-  if (values.file) {
-    if (values.file.type.startsWith("audio/")) return "audio";
-    if (values.file.type.startsWith("image/")) return "image";
-    return "video";
-  }
-  if (values.contentType === "frequency") return "audio";
-  if (values.fileType === "Image") return "image";
-  if (values.fileType === "Audio") return "audio";
-  if (values.fileType === "Video") return "video";
-  const val = (values.contentValue ?? "").toLowerCase();
-  if (/\.(mp3|wav|ogg|aac|m4a)$/.test(val)) return "audio";
-  if (/\.(jpg|jpeg|png|gif|webp|svg)$/.test(val)) return "image";
-  return "video";
-}
 function parseDurationSeconds(value?: string | null): number | null {
   if (!value) return null;
   const parts = value.split(":").map(Number);
@@ -85,17 +56,28 @@ function parseDurationSeconds(value?: string | null): number | null {
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   return null;
 }
+
+function requestErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    if (error.response?.status === 403) return "Your role or organization/facility scope does not allow this operation.";
+    if (error.response?.status === 409) return "The media state changed on the server. Refresh and try again.";
+    const body = error.response?.data as { message?: string; detail?: string } | undefined;
+    return body?.message || body?.detail || error.message || fallback;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
 function SourceMediaPage() {
   const navigate = useNavigate();
   const [messageApi, contextHolder] = message.useMessage();
   const { setActions } = useActionPanel();
-  const {
-    mediaItems,
-    addMediaItems,
-    updateMediaItem,
-    deleteMediaByIds,
-    updateApproval,
-  } = useSourceMediaStore();
+  const { selectedFacilityId, refreshFacilities } = useFacilityContext();
+  const [mediaItems, setMediaItems] = useState<SourceMediaItem[]>([]);
+  const [categories, setCategories] = useState<MediaCategoryApiItem[]>([]);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [category, setCategory] = useState("all");
   const [mediaType, setMediaType] = useState("all");
   const [approvalStatus, setApprovalStatus] = useState("all");
@@ -108,48 +90,68 @@ function SourceMediaPage() {
   const [editingMedia, setEditingMedia] = useState<SourceMediaItem | null>(
     null,
   );
-  const [sharingMedia, setSharingMedia] = useState<SourceMediaItem | null>(
-    null,
-  );
-  const [playingMedia, setPlayingMedia] = useState<SourceMediaItem | null>(
-    null,
-  );
-  const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([]);
   const [approveModalOpen, setApproveModalOpen] = useState(false);
   const [approvalTargetIds, setApprovalTargetIds] = useState<string[]>([]);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectionTargetIds, setRejectionTargetIds] = useState<string[]>([]);
-  const [storageFullModalOpen, setStorageFullModalOpen] = useState(false);
-  const categoryList = useMemo(() => {
-    const defaultCats = [
-      "Tin tức",
-      "Thể dục dưỡng sinh",
-      "Văn nghệ giải trí",
-      "Giáo dục",
-      "Thông báo hành chính",
-    ];
-    return [
-      ...new Set([...defaultCats, ...mediaItems.map((item) => item.category)]),
-    ];
-  }, [mediaItems]);
+  const categoryList = useMemo(() => categories.map((item) => item.categoryName), [categories]);
+
+  const refreshMedia = useCallback(async (categoryRows = categories) => {
+    const response = await mediaApi.getAll();
+    setMediaItems(response.map((item) => mapMediaItem(item, categoryRows)));
+    setLoadError(null);
+  }, [categories]);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
+    void (async () => {
+      try {
+        const user = await authApi.getMe();
+        if (!user.organizationId) throw new Error("Tài khoản hiện tại chưa được gán tổ chức.");
+        setOrganizationId(user.organizationId);
+        const [categoryRows, mediaRows] = await Promise.all([
+          mediaCategoryApi.getAll(),
+          mediaApi.getAll(),
+          refreshFacilities().catch(() => undefined),
+        ]).then(([cats, rows]) => [cats, rows] as const);
+        if (!active) return;
+        setCategories(categoryRows);
+        setMediaItems(mediaRows.map((item: MediaApiItem) => mapMediaItem(item, categoryRows)));
+      } catch (error) {
+        if (active) setLoadError(requestErrorMessage(error, "Unable to load media."));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [refreshFacilities]);
   const categoryOptions = useMemo(
+    () => categories.map((cat) => ({ id: cat.id, name: cat.categoryName })),
+    [categories],
+  );
+  const categoryFilterOptions = useMemo(
     () => [
       { label: "Tất cả", value: "all" },
-      ...categoryList.map((cat) => ({
-        label: cat,
-        value: cat,
+      ...categories.map((cat) => ({
+        label: cat.categoryName,
+        value: cat.id,
       })),
     ],
-    [categoryList],
+    [categories],
   );
   const filteredMedia = useMemo(() => {
     const search = keyword.trim().toLowerCase();
     const [startDate, endDate] = dateRange;
     return mediaItems.filter((item) => {
-      const matchCategory = category === "all" || item.category === category;
+      const matchCategory = category === "all" || item.categoryId === category;
       const matchType = mediaType === "all" || item.type === mediaType;
-      const matchStatus =
-        approvalStatus === "all" || item.status === approvalStatus;
+      const matchStatus = approvalStatus === "all" || (
+        approvalStatus === "processing"
+          ? ["Pending", "Processing"].includes(item.hlsProcessingStatus ?? "")
+          : item.status === approvalStatus
+      );
       const createdDate = dayjs(item.createdAt);
       const matchDate =
         (!startDate || !createdDate.isBefore(startDate, "day")) &&
@@ -181,13 +183,6 @@ function SourceMediaPage() {
   const handleOpenAddMedia = useCallback(() => {
     setCreateModalOpen(true);
   }, []);
-  const handleOpenBulkDelete = useCallback(() => {
-    if (selectedIds.length === 0) {
-      messageApi.warning("Vui lòng chọn media file cần xóa");
-      return;
-    }
-    setDeleteTargetIds(selectedIds);
-  }, [selectedIds, messageApi]);
   const handleOpenApprove = useCallback(() => {
     if (selectedIds.length === 0) {
       messageApi.warning("Vui lòng chọn media file cần phê duyệt");
@@ -227,13 +222,6 @@ function SourceMediaPage() {
         onClick: handleOpenAddMedia,
       },
       {
-        key: "delete-media",
-        icon: <Trash2 />,
-        tooltip: "Xóa nguồn tin",
-        danger: true,
-        onClick: handleOpenBulkDelete,
-      },
-      {
         key: "approve-media",
         icon: <FileCheckCorner color="#34CD26" />,
         tooltip: "Duyệt media file",
@@ -253,7 +241,6 @@ function SourceMediaPage() {
   }, [
     setActions,
     handleOpenAddMedia,
-    handleOpenBulkDelete,
     handleOpenApprove,
     handleOpenReject,
   ]);
@@ -264,7 +251,15 @@ function SourceMediaPage() {
     setDateRange([null, null]);
     setKeyword("");
     setCurrentPage(1);
-    messageApi.success("Đã làm mới danh sách Media");
+    setLoading(true);
+    setLoadError(null);
+    void Promise.all([mediaCategoryApi.getAll(), mediaApi.getAll()])
+      .then(([categoryRows, mediaRows]) => {
+        setCategories(categoryRows);
+        setMediaItems(mediaRows.map((item) => mapMediaItem(item, categoryRows)));
+      })
+      .catch((error: unknown) => setLoadError(requestErrorMessage(error, "Unable to refresh media.")))
+      .finally(() => setLoading(false));
   };
   const handleToggleSelect = (id: string, checked: boolean) => {
     setSelectedIds((prev) =>
@@ -274,135 +269,170 @@ function SourceMediaPage() {
   const handleOpenDetail = (media: SourceMediaItem) => {
     navigate(`${ROUTES.SOURCE_MEDIA}/${media.id}`);
   };
-  const handleDownloadMedia = (media: SourceMediaItem) => {
-    const link = document.createElement("a");
-    const downloadUrl = media.url ?? media.sourceUrl;
-    if (!downloadUrl || !/^(https?:\/\/|blob:|data:|\/)/i.test(downloadUrl)) {
-      messageApi.warning("Media này chưa có đường dẫn tải xuống hợp lệ");
-      return;
+  const handleSaveMedia = async (values: MediaFormValues) => {
+    const targetFacilityId = editingMedia?.facilityId ?? selectedFacilityId;
+    if (!organizationId || !targetFacilityId) {
+      throw new Error("Select an organization and facility before saving media.");
     }
-    link.href = downloadUrl;
-    link.download = media.fileName || media.title;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    messageApi.success(`Đang tải xuống "${media.title}"`);
-  };
-  const handleCreateMediaSubmit = (values: MediaFormValues) => {
-    const type = inferMediaType(values);
-    const sizeMB = values.file
-      ? Math.max(1, Math.round(values.file.size / (1024 * 1024)))
-      : 165;
-    const newItem: SourceMediaItem = {
-      id: `source-media-${Date.now()}`,
-      title: values.title,
-      fileName: values.file?.name ?? values.title,
-      category: values.category,
-      type,
-      contentType: values.contentType,
-      status: "pending",
-      duration: type === "image" ? "00:00:15" : "00:01:30",
-      sizeMB,
-      detailSizeLabel: `${sizeMB}MB`,
-      thumbnail:
-        values.file && values.file.type.startsWith("image/")
-          ? URL.createObjectURL(values.file)
-          : DEFAULT_MEDIA_THUMBNAIL,
-      attachmentOrLink:
-        values.file?.name ?? values.contentValue ?? "Snail.com/tintuc/ttbs.mp4",
-      sourceUrl: values.contentValue ?? undefined,
-      approvedBy: "Tòng Sỹ Nguyên",
-      createdBy: "Tuyết Nguyễn",
-      createdAt: new Date().toISOString(),
-      sharedArea: "Thủ Đức",
-      resolutions: [
-        { label: "4K", state: "processing" },
-        { label: "2K", state: "disabled" },
-        { label: "FHD", state: "ready-blue" },
-        { label: "HD", state: "ready-green" },
-      ],
-    };
-    addMediaItems([newItem]);
-    setCreateModalOpen(false);
-    setCurrentPage(1);
-    messageApi.success(`Đã thêm file media "${values.title}" thành công`);
-  };
-  const handleEditMediaSubmit = (values: MediaFormValues) => {
-    if (!editingMedia) return;
-    updateMediaItem(editingMedia.id, {
-      title: values.title,
-      category: values.category,
-      ...(values.file
-        ? {
-            fileName: values.file.name,
-            attachmentOrLink: values.file.name,
-            sourceUrl: undefined,
-          }
-        : {}),
-    });
-    setEditingMedia(null);
-    messageApi.success(`Đã cập nhật file media "${values.title}" thành công`);
-  };
-  const handleShareMediaSubmit = (
-    media: SourceMediaItem,
-    facilityIds: string[],
-  ) => {
-    const names = facilityIds
-      .map((id) => SHARE_FACILITY_NAME_MAP[id] ?? id)
-      .join(", ");
-    updateMediaItem(media.id, {
-      sharedFacilityIds: facilityIds,
-      sharedArea: names || media.sharedArea,
-    });
-    setSharingMedia(null);
-    messageApi.success(
-      `Đã chia sẻ "${media.title}" đến ${facilityIds.length} cơ sở thành công`,
-    );
-  };
-  const handleConfirmDelete = () => {
-    if (deleteTargetIds.length === 0) return;
-    const count = deleteTargetIds.length;
-    deleteMediaByIds(deleteTargetIds);
-    setSelectedIds((prev) =>
-      prev.filter((id) => !deleteTargetIds.includes(id)),
-    );
-    if (previewMediaId && deleteTargetIds.includes(previewMediaId)) {
-      setPreviewMediaId(null);
+    setSaving(true);
+    try {
+      if (values.contentType === "file" && !editingMedia) {
+        const file = values.file;
+        if (!file) throw new Error("Choose a file before uploading.");
+        const extensions: Record<string, "Image" | "Audio" | "Video"> = {
+          ".png": "Image", ".jpg": "Image", ".jpeg": "Image",
+          ".mp3": "Audio", ".wav": "Audio", ".mp4": "Video",
+        };
+        const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+        if (!extensions[extension]) {
+          throw new Error("Backend accepts MP4, MP3, WAV, PNG, JPG, and JPEG files.");
+        }
+        const session = await mediaApi.initializeUpload({
+          fileName: file.name,
+          mediaName: values.title,
+          fileSize: file.size,
+          organizationId,
+          facilityId: targetFacilityId,
+          categoryId: values.category || null,
+        });
+        const ranges = getUploadChunkRanges(file.size, session.chunkSize);
+        if (ranges.length !== session.totalChunks) {
+          throw new Error("Upload session returned an inconsistent chunk count.");
+        }
+        let uploadedBytes = 0;
+        setUploadProgress(0);
+        for (const range of ranges) {
+          const chunk = file.slice(range.start, range.end);
+          await mediaApi.uploadChunk(
+            session.uploadIdentifier,
+            range.index,
+            chunk,
+            (progress) => {
+              const chunkBytesSent = Math.min(progress.loaded, chunk.size);
+              setUploadProgress(
+                Math.min(
+                  99,
+                  Math.floor(((range.start + chunkBytesSent) / file.size) * 100),
+                ),
+              );
+            },
+          );
+          uploadedBytes += range.end - range.start;
+          setUploadProgress(Math.floor((uploadedBytes / file.size) * 100));
+        }
+        const status = await mediaApi.getUploadStatus(session.uploadIdentifier);
+        if (status.receivedChunks !== session.totalChunks || status.status !== "Uploading") {
+          throw new Error(status.failureReason || "Backend has not confirmed all upload chunks.");
+        }
+        const completed = await mediaApi.completeUpload(session.uploadIdentifier);
+        if (completed.status !== "Completed" || !completed.mediaId) {
+          throw new Error("Backend did not confirm upload completion.");
+        }
+        const created = await mediaApi.getById(completed.mediaId);
+        setMediaItems((items) => [
+          mapMediaItem(created, categories),
+          ...items.filter((item) => item.id !== created.id),
+        ]);
+        await refreshMedia(categories).catch(() => {
+          messageApi.warning("Upload completed, but the media list could not be refreshed.");
+        });
+        setCreateModalOpen(false);
+        setCurrentPage(1);
+        if (values.description) messageApi.warning("Descriptions are not stored by the backend media DTO.");
+        messageApi.success("Backend confirmed upload of " + created.mediaName + ".");
+      } else {
+        const sourceType =
+          values.contentType === "url" ? 1 :
+          values.contentType === "live" ? 2 :
+          values.contentType === "frequency" ? 3 : 0;
+        const fileType = values.contentType === "live"
+          ? "LiveStream"
+          : values.contentType === "frequency"
+            ? "Frequency"
+            : values.fileType ?? editingMedia?.fileType ?? "";
+        const contentValue = values.contentValue?.trim();
+        const payload = {
+          mediaName: values.title,
+          fileType,
+          sourceType,
+          facilityId: targetFacilityId,
+          sourceUrl: sourceType === 1 ? contentValue : null,
+          url: sourceType === 2 ? contentValue : null,
+          frequencyHz: sourceType === 3 ? Number(contentValue) : null,
+          categoryId: values.category || null,
+        };
+        const saved = editingMedia
+          ? await mediaApi.update(editingMedia.id, payload)
+          : await mediaApi.create(payload);
+        setMediaItems((items) => [
+          mapMediaItem(saved, categories),
+          ...items.filter((item) => item.id !== saved.id),
+        ]);
+        await refreshMedia(categories).catch(() => {
+          messageApi.warning("The save succeeded, but the media list could not be refreshed.");
+        });
+        if (editingMedia) setEditingMedia(null);
+        else setCreateModalOpen(false);
+        if (values.description) {
+          messageApi.warning("The backend media DTO does not persist descriptions; the description was not saved.");
+        }
+        messageApi.success("Backend confirmed save of " + saved.mediaName + ".");
+      }
+    } catch (error) {
+      messageApi.error(requestErrorMessage(error, "Unable to save media."));
+      throw error;
+    } finally {
+      setSaving(false);
+      setUploadProgress(null);
     }
-    setDeleteTargetIds([]);
-    messageApi.success(`Đã xóa ${count} nguồn media thành công`);
   };
-  const handleConfirmApprove = () => {
+  const handleConfirmApprove = async () => {
     if (approvalTargetIds.length === 0) {
       setApproveModalOpen(false);
       return;
     }
-    updateApproval(approvalTargetIds, "approved");
-    setSelectedIds((prev) =>
-      prev.filter((id) => !approvalTargetIds.includes(id)),
-    );
-    messageApi.success(
-      `Đã phê duyệt ${approvalTargetIds.length} media file thành công`,
-    );
-    setApprovalTargetIds([]);
-    setApproveModalOpen(false);
+    setSaving(true);
+    try {
+      const results = await Promise.allSettled(approvalTargetIds.map((id) => mediaApi.approve(id)));
+      const succeeded = approvalTargetIds.filter((_, index) => results[index].status === "fulfilled");
+      await refreshMedia().catch(() => messageApi.warning("Approval requests completed, but the media list could not be refreshed."));
+      setSelectedIds((previous) => previous.filter((id) => !succeeded.includes(id)));
+      if (succeeded.length === approvalTargetIds.length) {
+        messageApi.success("Backend confirmed approval of " + succeeded.length + " media item(s).");
+      } else {
+        messageApi.error("Backend approved " + succeeded.length + " of " + approvalTargetIds.length + " selected media item(s). Refresh and review the remaining items.");
+      }
+      setApprovalTargetIds([]);
+      setApproveModalOpen(false);
+    } catch (error) {
+      messageApi.error(requestErrorMessage(error, "Unable to approve media."));
+    } finally {
+      setSaving(false);
+    }
   };
-  const handleConfirmReject = (reason: string) => {
+  const handleConfirmReject = async (reason: string) => {
     if (rejectionTargetIds.length === 0) {
       setRejectModalOpen(false);
       return;
     }
-    updateApproval(rejectionTargetIds, "rejected", reason);
-    setSelectedIds((prev) =>
-      prev.filter((id) => !rejectionTargetIds.includes(id)),
-    );
-    messageApi.success(
-      `Đã từ chối duyệt ${rejectionTargetIds.length} media file`,
-    );
-    setRejectionTargetIds([]);
-    setRejectModalOpen(false);
+    setSaving(true);
+    try {
+      const results = await Promise.allSettled(rejectionTargetIds.map((id) => mediaApi.reject(id, { rejectionReason: reason })));
+      const succeeded = rejectionTargetIds.filter((_, index) => results[index].status === "fulfilled");
+      await refreshMedia().catch(() => messageApi.warning("Rejection requests completed, but the media list could not be refreshed."));
+      setSelectedIds((previous) => previous.filter((id) => !succeeded.includes(id)));
+      if (succeeded.length === rejectionTargetIds.length) {
+        messageApi.success("Backend confirmed rejection of " + succeeded.length + " media item(s).");
+      } else {
+        messageApi.error("Backend rejected " + succeeded.length + " of " + rejectionTargetIds.length + " selected media item(s). Refresh and review the remaining items.");
+      }
+      setRejectionTargetIds([]);
+      setRejectModalOpen(false);
+    } catch (error) {
+      messageApi.error(requestErrorMessage(error, "Unable to reject media."));
+    } finally {
+      setSaving(false);
+    }
   };
   const handleApproveSingle = (media: SourceMediaItem) => {
     if (media.status !== "pending") return;
@@ -414,10 +444,6 @@ function SourceMediaPage() {
     setRejectionTargetIds([media.id]);
     setRejectModalOpen(true);
   };
-  const handleDeleteSingle = (media: SourceMediaItem) => {
-    setDeleteTargetIds([media.id]);
-  };
-  const isSingleDelete = deleteTargetIds.length === 1;
   return (
     <div className="source-media-page">
       {contextHolder}
@@ -429,13 +455,12 @@ function SourceMediaPage() {
               Danh sách Media cơ sở đang quản lý
             </h2>
             <div className="source-media-panel__header-actions">
-              <button
+        <button
                 type="button"
                 className="source-media-panel__storage-btn"
-                title="Kiểm tra cảnh báo dung lượng lưu trữ"
-                onClick={() => setStorageFullModalOpen(true)}>
-                <HardDrive size={15} />
-                <span>Dung lượng lưu trữ</span>
+          title="Storage quota is not exposed by the current backend API"
+          onClick={() => messageApi.info("Storage quota is not available from the backend yet.")}>
+          <span>Dung lượng lưu trữ</span>
               </button>
               <AppIconButton
                 icon={<RefreshCw size={20} />}
@@ -455,7 +480,7 @@ function SourceMediaPage() {
                   <AppSelect
                     width="100%"
                     value={category}
-                    options={categoryOptions}
+                    options={categoryFilterOptions}
                     onChange={(value) => {
                       setCategory(String(value));
                       setCurrentPage(1);
@@ -520,7 +545,11 @@ function SourceMediaPage() {
               </AppFilterField>
             </AppFilter>
           </div>
-          {paginatedMedia.length > 0 ? (
+          {loading ? (
+            <div className="source-media-panel__empty"><Spin /></div>
+          ) : loadError ? (
+            <div className="source-media-panel__empty">Media could not be loaded. Use refresh to try again.</div>
+          ) : paginatedMedia.length > 0 ? (
             <div
               className={[
                 "source-media-grid",
@@ -540,9 +569,7 @@ function SourceMediaPage() {
                   onEdit={(item) => setEditingMedia(item)}
                   onApprove={handleApproveSingle}
                   onReject={handleRejectSingle}
-                  onShare={(item) => setSharingMedia(item)}
-                  onDownload={handleDownloadMedia}
-                  onDelete={handleDeleteSingle}
+                  processingStatus={media.hlsProcessingStatus}
                 />
               ))}
             </div>
@@ -573,12 +600,15 @@ function SourceMediaPage() {
           />
         )}
       </div>
-      <MediaFormModal
+          <MediaFormModal
         open={createModalOpen}
         mode="create"
         categories={categoryList}
         onCancel={() => setCreateModalOpen(false)}
-        onSubmit={handleCreateMediaSubmit}
+        categoryOptions={categoryOptions}
+        loading={saving}
+        uploadProgress={uploadProgress}
+        onSubmit={handleSaveMedia}
       />
       <MediaFormModal
         open={editingMedia !== null}
@@ -589,43 +619,15 @@ function SourceMediaPage() {
                 ...editingMedia,
                 contentType: editingMedia.contentType,
                 contentValue: editingMedia.attachmentOrLink,
-                fileType:
-                  editingMedia.type === "image"
-                    ? "Image"
-                    : editingMedia.type === "audio"
-                      ? "Audio"
-                      : "Video",
+                fileType: editingMedia.fileType,
               }
             : null
         }
         categories={categoryList}
         onCancel={() => setEditingMedia(null)}
-        onSubmit={handleEditMediaSubmit}
-      />
-      <SourceMediaShareModal
-        media={sharingMedia}
-        onCancel={() => setSharingMedia(null)}
-        onShare={handleShareMediaSubmit}
-      />
-      <SourceMediaPlayerModal
-        item={playingMedia}
-        onClose={() => setPlayingMedia(null)}
-      />
-      <AppConfirmModal
-        open={deleteTargetIds.length > 0}
-        type="delete"
-        title={
-          isSingleDelete ? "Xác nhận xóa nguồn tin" : "Xác nhận xóa file media"
-        }
-        description={
-          isSingleDelete
-            ? "Nguồn tin này sẽ bị xóa khỏi hệ thống và không thể khôi phục."
-            : "Các media file được chọn sẽ bị xóa khỏi hệ thống và không thể khôi phục."
-        }
-        confirmText="Tiếp tục"
-        cancelText="Hủy"
-        onConfirm={handleConfirmDelete}
-        onCancel={() => setDeleteTargetIds([])}
+        categoryOptions={categoryOptions}
+        loading={saving}
+        onSubmit={handleSaveMedia}
       />
       <AppConfirmModal
         open={approveModalOpen}
@@ -635,27 +637,15 @@ function SourceMediaPage() {
         confirmText="Tiếp tục"
         cancelText="Hủy"
         onConfirm={handleConfirmApprove}
+        confirmLoading={saving}
         onCancel={() => setApproveModalOpen(false)}
       />
       <MediaRejectModal
         open={rejectModalOpen}
+        loading={saving}
         onCancel={() => setRejectModalOpen(false)}
         onConfirm={async (reason) => {
           handleConfirmReject(reason);
-        }}
-      />
-      <AppConfirmModal
-        open={storageFullModalOpen}
-        type="delete"
-        icon={<AlertTriangle size={40} strokeWidth={2} />}
-        title="Bạn đã hết dung lượng lưu trữ"
-        description="Hãy thay đổi gói cước khác hoặc giải phóng kho media file để tải media mới."
-        cancelText="Hủy"
-        confirmText="Nâng cấp"
-        onCancel={() => setStorageFullModalOpen(false)}
-        onConfirm={() => {
-          setStorageFullModalOpen(false);
-          navigate(`${ROUTES.PROFILE}/renewal-history`);
         }}
       />
     </div>
