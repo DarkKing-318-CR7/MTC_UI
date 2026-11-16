@@ -12,6 +12,7 @@ import AppTableActions from "../../common/AppTableActions";
 import AppDateRangePicker from "../../common/AppDateRangePicker";
 import type { DateRangeValue } from "../../common/AppDateRangePicker";
 import AppStatusTag from "../../common/AppStatusTag";
+import { activationLabels, getTemplateActivationLabel } from "./templateStatus";
 
 import "./TemplateList.css";
 
@@ -22,6 +23,7 @@ export interface TemplateListItem {
   createdAt: string;
   createdBy: string;
   usageStatus?: string;
+  isActive?: boolean;
 }
 
 interface TemplateListProps<T extends TemplateListItem> {
@@ -31,6 +33,7 @@ interface TemplateListProps<T extends TemplateListItem> {
   onEdit: (id: string) => void;
   onDetail: (id: string) => void;
   showUsageStatus?: boolean;
+  showActivationStatus?: boolean;
   pageSize?: number;
   canEdit?: (template: T) => boolean;
 }
@@ -49,6 +52,7 @@ function TemplateList<T extends TemplateListItem>({
   onEdit,
   onDetail,
   showUsageStatus = false,
+  showActivationStatus = false,
   pageSize = 10,
   canEdit,
 }: TemplateListProps<T>) {
@@ -61,8 +65,11 @@ function TemplateList<T extends TemplateListItem>({
     const [startDate, endDate] = dateRange ?? [null, null];
 
     return templates.filter((template) => {
-      const matchAspectRatio =
-        aspectRatio === "all" || template.aspectRatio === aspectRatio;
+      const [width, height] = template.aspectRatio.split("x").map(Number);
+      const matchAspectRatio = aspectRatio === "all" ||
+        template.aspectRatio.replace(/\s/g, "") === aspectRatio.replace(/\s/g, "") ||
+        (aspectRatio === "16:9" && width > 0 && height > 0 && width * 9 === height * 16) ||
+        (aspectRatio === "9:16" && width > 0 && height > 0 && width * 16 === height * 9);
 
       const matchKeyword =
         !search || template.name.toLowerCase().includes(search);
@@ -112,6 +119,21 @@ function TemplateList<T extends TemplateListItem>({
       ellipsis: true,
     },
   ];
+
+  if (showActivationStatus) {
+    columns.push({
+      title: activationLabels.title,
+      dataIndex: "isActive",
+      key: "isActive",
+      width: 145,
+      render: (value?: boolean) => value === undefined
+        ? "-"
+        : <AppStatusTag
+            variant={value ? "green" : "blue"}
+            label={getTemplateActivationLabel(value)}
+          />,
+    });
+  }
 
   if (showUsageStatus) {
     columns.push({

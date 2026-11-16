@@ -9,8 +9,9 @@
 
 .template-preview__layer {
   position: absolute;
-  display: block;
-  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   background: transparent;
   border: 2px solid transparent;
@@ -67,7 +68,6 @@
 .template-preview--presentation .template-preview__layer {
   border: none;
   cursor: default;
-  pointer-events: none;
 }
 
 .template-preview--presentation .template-preview__layer.is-active {
@@ -76,4 +76,11 @@
 
 .template-preview--presentation .template-preview__empty {
   color: #fff;
+}
+
+.template-preview__layer > .authenticated-hls-player,
+.template-preview__layer > .template-media-preview__message,
+.template-preview__layer > .template-media-preview__image {
+  width: 100%;
+  height: 100%;
 }

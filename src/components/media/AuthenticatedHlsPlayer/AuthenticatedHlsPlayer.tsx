@@ -12,6 +12,7 @@ interface AuthenticatedHlsPlayerProps {
   approvalStatus: string;
   processingStatus: string;
   playbackUrl?: string | null;
+  fillContainer?: boolean;
 }
 
 function resolvePlaybackUrl(playbackUrl: string): string {
@@ -22,13 +23,37 @@ function resolvePlaybackUrl(playbackUrl: string): string {
   return new URL(playbackUrl, base).toString();
 }
 
+export function isValidHlsPlaybackUrl(playbackUrl: string | null | undefined, mediaId: string): boolean {
+  if (!playbackUrl) return false;
+  try {
+    const apiBase = axiosInstance.defaults.baseURL || window.location.origin;
+    const base = new URL(apiBase, window.location.origin);
+    const url = new URL(playbackUrl, base);
+    return url.origin === base.origin &&
+      url.pathname === `/api/media/${encodeURIComponent(mediaId)}/hls/index.m3u8`;
+  } catch {
+    return false;
+  }
+}
+
 export function attachCurrentBearerToken(xhr: XMLHttpRequest): void {
   const token = authStorage.getAccessToken();
   if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 }
 
-function getUnavailableMessage(status: string, approved: boolean): string {
-  if (!approved) return "Playback is available after this Media is approved.";
+function normalizeApprovalStatus(status: string): string {
+  return status.trim().toLocaleLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d");
+}
+
+function getUnavailableMessage(status: string, approvalStatus: string, approved: boolean): string {
+  const normalizedApproval = normalizeApprovalStatus(approvalStatus);
+  if (normalizedApproval.includes("tu choi") || normalizedApproval === "rejected") {
+    return "This Media was rejected and cannot be previewed.";
+  }
+  if (normalizedApproval.includes("cho duyet") || normalizedApproval === "pending") {
+    return "This Media is pending approval and cannot be previewed.";
+  }
+  if (!approved) return "Playback is available only after this Media is approved.";
   switch (status.toLowerCase()) {
     case "pending":
       return "HLS processing is queued.";
@@ -49,6 +74,7 @@ function AuthenticatedHlsPlayer({
   approvalStatus,
   processingStatus,
   playbackUrl,
+  fillContainer = false,
 }: AuthenticatedHlsPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -57,13 +83,16 @@ function AuthenticatedHlsPlayer({
   const [authRetry, setAuthRetry] = useState(0);
   const [unsupported, setUnsupported] = useState(false);
 
-  const approved = approvalStatus.toLowerCase() === "approved" || approvalStatus.includes("Đã duyệt");
+  const normalizedApproval = normalizeApprovalStatus(approvalStatus);
+  const approved = normalizedApproval === "approved" || normalizedApproval === "da duyet";
   const ready = processingStatus.toLowerCase() === "ready";
-  const canPlayHls = approved && ready && Boolean(playbackUrl);
+  const validPlaybackUrl = isValidHlsPlaybackUrl(playbackUrl, mediaId);
+  const canPlayHls = approved && ready && validPlaybackUrl;
 
   useEffect(() => {
     setMessage("");
     setManifestLoaded(false);
+    setUnsupported(false);
 
     if (!canPlayHls || !playbackUrl) return;
 
@@ -186,7 +215,7 @@ function AuthenticatedHlsPlayer({
   if (!canPlayHls) {
     return (
       <div className="authenticated-hls-player__message" role="status">
-        {getUnavailableMessage(processingStatus, approved)}
+        {getUnavailableMessage(processingStatus, approvalStatus, approved)}
       </div>
     );
   }
@@ -200,7 +229,7 @@ function AuthenticatedHlsPlayer({
   }
 
   return (
-    <div className="authenticated-hls-player">
+    <div className={`authenticated-hls-player${fillContainer ? " authenticated-hls-player--fill" : ""}`}>
       {mediaType === "audio" ? (
         <audio ref={audioRef} controls preload="metadata" />
       ) : (

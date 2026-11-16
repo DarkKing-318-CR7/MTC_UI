@@ -1,4 +1,4 @@
-import { Maximize, Minus, Volume2, VolumeX } from "lucide-react";
+import { Maximize, Minus, Volume2, VolumeX, X } from "lucide-react";
 
 import type {
   TemplateSource,
@@ -13,6 +13,7 @@ interface TemplateLayerListProps {
   activeLayerId: string | null;
   onSelect: (layerId: string) => void;
   onUpdateLayer?: (layerId: string, changes: Partial<TemplateLayer>) => void;
+  onRemoveLayer?: (layerId: string) => void;
   disabled?: boolean;
 }
 
@@ -22,6 +23,7 @@ function TemplateLayerList({
   activeLayerId,
   onSelect,
   onUpdateLayer,
+  onRemoveLayer,
   disabled = false,
 }: TemplateLayerListProps) {
   const resizeLayer = (layer: TemplateLayer, amount: number) => {
@@ -46,8 +48,6 @@ function TemplateLayerList({
       {layers.map((layer) => {
         const source = sources.find((item) => item.id === layer.sourceId);
 
-        if (!source) return null;
-
         const isActive = activeLayerId === layer.id;
         const hasAudio = layer.hasAudio ?? true;
 
@@ -64,9 +64,13 @@ function TemplateLayerList({
               type="button"
               className="template-layer-list__select"
               onClick={() => onSelect(layer.id)}
-              title={source.name}
-              aria-label={`Chọn layer ${source.name}`}>
-              <img src={source.thumbnail} alt={source.name} loading="lazy" />
+              title={source?.name || layer.zoneName || "Saved zone"}
+              aria-label={`Select layer ${source?.name || layer.zoneName || "Saved zone"}`}>
+              {source?.thumbnail ? (
+                <img src={source.thumbnail} alt={source.name} loading="lazy" />
+              ) : (
+                <span>{source?.name || layer.zoneName || "Saved zone"}</span>
+              )}
             </button>
 
             <div className="template-layer-list__controls">
@@ -97,6 +101,16 @@ function TemplateLayerList({
                 onClick={() => toggleAudio(layer)}>
                 {hasAudio ? <Volume2 size={16} /> : <VolumeX size={16} />}
               </button>
+              {onRemoveLayer && (
+                <button
+                  type="button"
+                  title="Remove zone"
+                  aria-label={`Remove zone ${layer.zoneName || source?.name || ""}`}
+                  disabled={disabled}
+                  onClick={() => onRemoveLayer(layer.id)}>
+                  <X size={16} />
+                </button>
+              )}
             </div>
 
             <div className="template-layer-list__badges">
@@ -104,7 +118,7 @@ function TemplateLayerList({
                 FHD
               </span>
 
-              {source.resolution?.map((resolution, index) => (
+              {source?.resolution?.map((resolution, index) => (
                 <span
                   key={`${resolution}-${index}`}
                   className={[

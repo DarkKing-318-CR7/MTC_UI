@@ -1,13 +1,16 @@
 import { render, screen } from "@testing-library/react";
 
-import AuthenticatedHlsPlayer, { attachCurrentBearerToken } from "./AuthenticatedHlsPlayer";
+import AuthenticatedHlsPlayer, {
+  attachCurrentBearerToken,
+  isValidHlsPlaybackUrl,
+} from "./AuthenticatedHlsPlayer";
 
 const baseProps = {
-  mediaId: "media-id",
+  mediaId: "11111111-1111-1111-1111-111111111111",
   mediaType: "video" as const,
   approvalStatus: "approved",
   processingStatus: "Pending",
-  playbackUrl: "/api/media/media-id/hls/index.m3u8",
+  playbackUrl: "/api/media/11111111-1111-1111-1111-111111111111/hls/index.m3u8",
 };
 
 describe("AuthenticatedHlsPlayer eligibility", () => {
@@ -23,7 +26,24 @@ describe("AuthenticatedHlsPlayer eligibility", () => {
       <AuthenticatedHlsPlayer {...baseProps} processingStatus="Ready" approvalStatus="pending" />,
     );
 
-    expect(screen.getByText("Playback is available after this Media is approved.")).toBeInTheDocument();
+    expect(screen.getByText("This Media is pending approval and cannot be previewed.")).toBeInTheDocument();
+    expect(container.querySelector("video, audio")).toBeNull();
+  });
+
+  it("shows a rejection-specific message and does not create a player", () => {
+    const { container } = render(
+      <AuthenticatedHlsPlayer {...baseProps} processingStatus="Ready" approvalStatus="Từ chối duyệt" />,
+    );
+    expect(screen.getByText("This Media was rejected and cannot be previewed.")).toBeInTheDocument();
+    expect(container.querySelector("video, audio")).toBeNull();
+  });
+
+  it("requires a valid backend HLS playlist URL before rendering media controls", () => {
+    expect(isValidHlsPlaybackUrl(baseProps.playbackUrl, baseProps.mediaId)).toBe(true);
+    expect(isValidHlsPlaybackUrl("https://untrusted.example/index.m3u8", baseProps.mediaId)).toBe(false);
+    expect(isValidHlsPlaybackUrl("/api/media/other/hls/index.m3u8", baseProps.mediaId)).toBe(false);
+    const { container } = render(<AuthenticatedHlsPlayer {...baseProps} playbackUrl={null} processingStatus="Ready" />);
+    expect(screen.getByText("The protected HLS playback URL is not available.")).toBeInTheDocument();
     expect(container.querySelector("video, audio")).toBeNull();
   });
 

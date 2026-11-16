@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FolderRoot, Play, X } from "lucide-react";
 
+import axios from "axios";
+import axiosInstance from "../../../api/axiosInstance";
 import type { MediaItem } from "../../../types/media.types";
 import AuthenticatedHlsPlayer from "../AuthenticatedHlsPlayer/AuthenticatedHlsPlayer";
 
@@ -21,6 +23,70 @@ export interface MediaPreviewItem extends MediaItem {
 interface MediaPreviewProps<T extends MediaPreviewItem> {
   media: T;
   onClose: () => void;
+}
+
+type OriginalPreviewKind = "image" | "audio" | "video";
+
+function AuthenticatedOriginalPreview({
+  mediaId,
+  title,
+  kind,
+}: {
+  mediaId: string;
+  title: string;
+  kind: OriginalPreviewKind;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    let createdUrl: string | null = null;
+    setObjectUrl(null);
+    setErrorMessage(null);
+    setPlaybackError(null);
+
+    void axiosInstance.get<Blob>(`/media/${encodeURIComponent(mediaId)}/stream`, {
+      responseType: "blob",
+      signal: controller.signal,
+    }).then((response) => {
+      if (!active) return;
+      createdUrl = URL.createObjectURL(response.data);
+      setObjectUrl(createdUrl);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        setErrorMessage("Your session expired. Sign in to preview this file.");
+      } else if (axios.isAxiosError(error) && error.response?.status === 403) {
+        setErrorMessage("Your account or facility cannot access this file.");
+      } else if (axios.isAxiosError(error) && error.response?.status === 404) {
+        setErrorMessage("The original media file is unavailable.");
+      } else {
+        setErrorMessage("Unable to load the authenticated media preview.");
+      }
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [mediaId]);
+
+  if (errorMessage) {
+    return <div className="media-preview__placeholder" role="status">{errorMessage}</div>;
+  }
+  if (playbackError) {
+    return <div className="media-preview__placeholder" role="status">{playbackError}</div>;
+  }
+  if (!objectUrl) {
+    return <div className="media-preview__placeholder" role="status">Loading media preview…</div>;
+  }
+  if (kind === "image") return <img src={objectUrl} alt={title} onError={() => setPlaybackError("The original image could not be displayed.")} />;
+  if (kind === "audio") return <audio src={objectUrl} controls preload="metadata" aria-label={title} onError={() => setPlaybackError("The original audio file could not be played.")} />;
+  return <video src={objectUrl} controls preload="metadata" playsInline aria-label={title} onError={() => setPlaybackError("The original video file could not be played.")} />;
 }
 
 const statusConfig = {
@@ -87,6 +153,14 @@ function MediaPreview<T extends MediaPreviewItem>({
   const isVideo = media.type === "video";
   const isAudio = media.type === "audio";
   const isImage = media.type === "image";
+  const isUploadedFile = media.sourceType === 0;
+  const fileExtension = (media.fileName ?? "").toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+  const isSupportedAudioFile = fileExtension === ".mp3" || fileExtension === ".wav";
+  const useHlsVideo = isUploadedFile && isVideo && Boolean(media.hlsProcessingStatus) &&
+    media.hlsProcessingStatus?.toLowerCase() !== "notrequired";
+  const useAuthenticatedImage = isUploadedFile && isImage;
+  const useAuthenticatedAudio = isUploadedFile && isAudio && isSupportedAudioFile;
+  const useAuthenticatedVideo = isUploadedFile && isVideo && !useHlsVideo;
 
   const thumbnail =
     media.thumbnail || (isImage ? media.sourceUrl || media.url || "" : "");
@@ -115,14 +189,20 @@ function MediaPreview<T extends MediaPreviewItem>({
       <div className="media-preview__top">
         <div className="media-preview__main">
           <div className="media-preview__thumbnail">
-            {media.sourceType === 0 && (isVideo || isAudio) && media.hlsProcessingStatus ? (
+            {useAuthenticatedImage ? (
+              <AuthenticatedOriginalPreview key={media.id} mediaId={media.id} title={media.title} kind="image" />
+            ) : useHlsVideo ? (
               <AuthenticatedHlsPlayer
                 mediaId={media.id}
-                mediaType={isAudio ? "audio" : "video"}
+                mediaType="video"
                 approvalStatus={media.status}
-                processingStatus={media.hlsProcessingStatus}
+                processingStatus={media.hlsProcessingStatus ?? "Pending"}
                 playbackUrl={media.hlsPlaybackUrl}
               />
+            ) : useAuthenticatedAudio ? (
+              <AuthenticatedOriginalPreview key={media.id} mediaId={media.id} title={media.title} kind="audio" />
+            ) : useAuthenticatedVideo ? (
+              <AuthenticatedOriginalPreview key={media.id} mediaId={media.id} title={media.title} kind="video" />
             ) : showThumbnail ? (
               <img
                 key={thumbnail}
@@ -136,7 +216,7 @@ function MediaPreview<T extends MediaPreviewItem>({
               </div>
             )}
 
-            {(isVideo || isAudio) && !(media.sourceType === 0 && media.hlsProcessingStatus) && (
+            {(isVideo || isAudio) && !useHlsVideo && !useAuthenticatedAudio && !useAuthenticatedVideo && (
               <button
                 type="button"
                 className="media-preview__play"

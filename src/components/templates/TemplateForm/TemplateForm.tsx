@@ -22,7 +22,7 @@ interface TemplateFormProps {
   sources: TemplateSource[];
   initialData?: TemplateFormData;
   onCancel: () => void;
-  onSave?: (data: TemplateFormData) => void;
+  onSave?: (data: TemplateFormData) => void | Promise<void>;
   onEdit?: () => void;
   canEdit?: boolean;
 }
@@ -52,6 +52,7 @@ function TemplateForm({
   const [layers, setLayers] = useState<TemplateLayer[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [isPresenting, setIsPresenting] = useState(false);
+  const [presentationClosing, setPresentationClosing] = useState(false);
 
   const screenWidth = Form.useWatch("screenWidth", form);
   const screenHeight = Form.useWatch("screenHeight", form);
@@ -73,7 +74,7 @@ function TemplateForm({
   }, [initialData, form]);
 
   const selectedIds = useMemo(
-    () => layers.map((layer) => layer.sourceId),
+    () => layers.map((layer) => layer.sourceId).filter(Boolean),
     [layers],
   );
 
@@ -99,6 +100,10 @@ function TemplateForm({
     const newLayer: TemplateLayer = {
       id: crypto.randomUUID(),
       sourceId,
+      zoneName: `Zone ${layers.length + 1}`,
+      allowedMediaTypes: sources.find((source) => source.id === sourceId)
+        ? `${sources.find((source) => source.id === sourceId)!.type[0].toUpperCase()}${sources.find((source) => source.id === sourceId)!.type.slice(1)}`
+        : undefined,
       width: 100,
       height: 100,
       x: 0,
@@ -142,7 +147,13 @@ function TemplateForm({
       return;
     }
 
+    setPresentationClosing(false);
     setIsPresenting(true);
+  };
+
+  const handlePresentationClose = () => {
+    setPresentationClosing(true);
+    setIsPresenting(false);
   };
 
   const handleSave = async () => {
@@ -156,12 +167,17 @@ function TemplateForm({
         return;
       }
 
-      onSave?.({
+      await onSave?.({
         name: values.name.trim(),
         screenHeight: values.screenHeight ?? null,
         screenWidth: values.screenWidth ?? null,
         duration: initialData?.duration ?? "00:00:00",
         layers,
+        organizationId: initialData?.organizationId,
+        facilityId: initialData?.facilityId,
+        description: initialData?.description,
+        layoutConfigJson: initialData?.layoutConfigJson,
+        isActive: initialData?.isActive,
       });
     } catch {
       return;
@@ -172,6 +188,12 @@ function TemplateForm({
     <div className="template-form">
       <section className="template-form__sidebar">
         <h2>{isCreate ? "Thêm mới" : isView ? "Chi tiết" : "Cập nhật"}</h2>
+        {isView && (
+          <div className="template-form__creator" aria-label="Template creator">
+            <span>Created by</span>
+            <strong>{initialData?.createdByName?.trim() || "\u2014"}</strong>
+          </div>
+        )}
 
         <Form
           form={form}
@@ -255,6 +277,7 @@ function TemplateForm({
               screenWidth={previewWidth}
               screenHeight={previewHeight}
               onSelect={setActiveLayerId}
+              active={!isPresenting && !presentationClosing}
             />
 
             <div className="template-form__properties">
@@ -340,6 +363,11 @@ function TemplateForm({
             activeLayerId={activeLayerId}
             onSelect={setActiveLayerId}
             onUpdateLayer={updateLayer}
+            onRemoveLayer={(layerId) => {
+              const nextLayers = layers.filter((layer) => layer.id !== layerId);
+              setLayers(nextLayers);
+              if (activeLayerId === layerId) setActiveLayerId(nextLayers[0]?.id ?? null);
+            }}
             disabled={isView}
           />
         </div>
@@ -366,7 +394,10 @@ function TemplateForm({
 
       <AppModal
         open={isPresenting}
-        onCancel={() => setIsPresenting(false)}
+        onCancel={handlePresentationClose}
+        afterOpenChange={(open) => {
+          if (!open) setPresentationClosing(false);
+        }}
         footer={null}
         width="90vw"
         centered
@@ -380,6 +411,7 @@ function TemplateForm({
             screenHeight={previewHeight}
             onSelect={() => {}}
             presentation
+            active={isPresenting}
           />
         </div>
       </AppModal>

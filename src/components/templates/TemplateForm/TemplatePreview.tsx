@@ -1,7 +1,5 @@
-import type {
-  TemplateSource,
-  TemplateLayer,
-} from "../../../types/template.types";
+import type { TemplateSource, TemplateLayer } from "../../../types/template.types";
+import TemplateMediaPreview from "./TemplateMediaPreview";
 
 import "./TemplatePreview.css";
 
@@ -13,6 +11,7 @@ interface TemplatePreviewProps {
   screenHeight: number;
   onSelect: (layerId: string) => void;
   presentation?: boolean;
+  active?: boolean;
 }
 
 function TemplatePreview({
@@ -23,6 +22,7 @@ function TemplatePreview({
   screenHeight,
   onSelect,
   presentation = false,
+  active = true,
 }: TemplatePreviewProps) {
   const safeWidth = screenWidth > 0 ? screenWidth : 1920;
   const safeHeight = screenHeight > 0 ? screenHeight : 1080;
@@ -32,17 +32,10 @@ function TemplatePreview({
       className={[
         "template-preview",
         presentation ? "template-preview--presentation" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-      style={{
-        aspectRatio: `${safeWidth} / ${safeHeight}`,
-      }}>
+      ].filter(Boolean).join(" ")}
+      style={{ aspectRatio: `${safeWidth} / ${safeHeight}` }}>
       {layers.map((layer) => {
         const source = sources.find((item) => item.id === layer.sourceId);
-
-        if (!source) return null;
-
         const style = {
           left: `${(layer.x / safeWidth) * 100}%`,
           top: `${(layer.y / safeHeight) * 100}%`,
@@ -51,46 +44,37 @@ function TemplatePreview({
           zIndex: layer.zIndex,
         };
 
-        const content =
-          source.type === "image" ? (
-            <img src={source.url} alt={source.name} />
-          ) : (
-            <div className="template-preview__media">
-              {source.type === "video" ? "Video" : "Âm thanh"}
-              <span>{source.name}</span>
-            </div>
-          );
-
-        if (presentation) {
-          return (
-            <div
-              key={layer.id}
-              className="template-preview__layer"
-              style={style}>
-              {content}
-            </div>
-          );
-        }
-
         return (
-          <button
+          <div
             key={layer.id}
-            type="button"
             className={[
               "template-preview__layer",
-              activeLayerId === layer.id ? "is-active" : "",
-            ].join(" ")}
+              activeLayerId === layer.id && !presentation ? "is-active" : "",
+            ].filter(Boolean).join(" ")}
             style={style}
-            onClick={() => onSelect(layer.id)}
-            title={source.name}>
-            {content}
-          </button>
+            onMouseDown={() => {
+              if (!presentation) onSelect(layer.id);
+            }}
+            title={source?.name || layer.zoneName || "Saved zone"}>
+            {!active ? (
+              <div className="template-preview__media">
+                <span>Presentation preview is active</span>
+              </div>
+            ) : source ? (
+              <TemplateMediaPreview source={source} fillContainer />
+            ) : (
+              <div className="template-preview__media">
+                Saved zone
+                <span>{layer.zoneName || "Media assignment is not stored by the backend"}</span>
+              </div>
+            )}
+          </div>
         );
       })}
 
       {layers.length === 0 && (
         <div className="template-preview__empty">
-          Chọn nguồn thông tin để thiết kế bản mẫu
+          Select an approved Media item to design a template.
         </div>
       )}
     </div>

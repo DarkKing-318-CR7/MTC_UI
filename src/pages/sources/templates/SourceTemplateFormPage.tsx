@@ -1,261 +1,204 @@
 import { useEffect, useMemo, useState } from "react";
-import { Empty, message } from "antd";
-import { Trash2 } from "lucide-react";
+import { Alert, Empty, message, Spin } from "antd";
+import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 
 import AppTabs from "../../../components/common/AppTabs";
 import AppButton from "../../../components/common/AppButton";
-import AppConfirmModal from "../../../components/common/AppConfirmModal";
-
 import TemplateForm from "../../../components/templates/TemplateForm";
-import TemplateUsedNews from "../../../components/templates/TemplateUsedNews/TemplateUsedNews";
-
+import { authApi } from "../../../api/authApi";
+import mediaApi from "../../../api/mediaApi";
+import { templateApi } from "../../../api/templateApi";
+import { useFacilityContext } from "../../../contexts/FacilityContext";
 import { useActionPanel } from "../../../contexts/ActionPanelContext";
-
-import { sourceTemplateSourcesMock } from "./data/sourceTemplateSources.mock";
-
-import {
-  createSourceTemplateUsedNewsMock,
-  deleteSourceTemplateUsedNews,
-} from "./data/SourceTemplateUsedNews.mock";
-
-import {
-  findSourceTemplate,
-  saveStoredSourceTemplate,
-  deleteStoredSourceTemplates,
-} from "./data/sourceTemplateStorage";
-
-import {
-  facilityNewsTypeOptions,
-  facilityNewsApprovalOptions,
-  facilityNewsBroadcastOptions,
-  facilityNewsRepeatOptions,
-} from "../../facilities/data/facilitiesPlaylistNews.mock";
-
-import type {
-  TemplateFormData,
-  TemplateFormMode,
-} from "../../../types/template.types";
+import type { TemplateApiItem } from "../../../api/templateApi";
+import type { TemplateFormData, TemplateFormMode, TemplateSource } from "../../../types/template.types";
+import { buildTemplateUpsertRequest, mapEligibleTemplateSources, mapTemplateToForm } from "./data/sourceTemplateApiMapper";
 
 import "./SourceTemplateFormPage.css";
 
-interface SourceTemplateFormPageProps {
-  mode: TemplateFormMode;
-}
-
+interface SourceTemplateFormPageProps { mode: TemplateFormMode }
 type DetailTab = "information" | "news";
 
-const filterOptions = {
-  newsTypes: facilityNewsTypeOptions,
-  approvals: facilityNewsApprovalOptions,
-  broadcasts: facilityNewsBroadcastOptions,
-  repeats: facilityNewsRepeatOptions,
-};
+function getErrorMessage(error: unknown, action: string): string {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 401) return "Your session has expired. Sign in and retry.";
+    if (status === 403) return "Your role or organization/facility scope cannot perform this operation.";
+    if (status === 404) return "The template or media was not found.";
+    if (status === 409) return "The template changed on the server. Refresh before retrying.";
+    const body = error.response?.data as { message?: string; detail?: string } | undefined;
+    return body?.message || body?.detail || error.message || action;
+  }
+  return error instanceof Error ? error.message : action;
+}
 
 function SourceTemplateFormPage({ mode }: SourceTemplateFormPageProps) {
   const navigate = useNavigate();
   const { setActions } = useActionPanel();
-
-  const { templateId } = useParams<{
-    templateId: string;
-  }>();
-
-  const [activeTab, setActiveTab] = useState<DetailTab>("information");
-
-  const [deleteOpen, setDeleteOpen] = useState(false);
-
+  const { selectedFacilityId, selectedFacility } = useFacilityContext();
+  const { templateId } = useParams<{ templateId: string }>();
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
   const isView = mode === "view";
 
-  // Lấy dữ liệu bản mẫu
-  const template = useMemo(() => {
-    if (isCreate || !templateId) {
-      return undefined;
-    }
+  const [template, setTemplate] = useState<TemplateApiItem | null>(null);
+  const [sources, setSources] = useState<TemplateSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<DetailTab>("information");
 
-    return findSourceTemplate(templateId);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
+    setSourceError(null);
+    void (async () => {
+      try {
+        const tasks: [Promise<TemplateApiItem | null>, ReturnType<typeof mediaApi.getAll>] = [
+          isCreate
+            ? Promise.resolve(null)
+            : templateId
+              ? templateApi.getById(templateId)
+              : Promise.reject(new Error("Template ID is missing.")),
+          mediaApi.getAll(),
+        ];
+        const [templateResult, mediaResult] = await Promise.allSettled(tasks);
+        if (!active) return;
+
+        if (templateResult.status === "fulfilled") setTemplate(templateResult.value);
+        else setLoadError(getErrorMessage(templateResult.reason, "Unable to load template."));
+
+        if (mediaResult.status === "fulfilled") {
+          setSources(mapEligibleTemplateSources(mediaResult.value));
+        } else {
+          setSources([]);
+          setSourceError(getErrorMessage(mediaResult.reason, "Unable to load approved media."));
+        }
+      } catch (error) {
+        if (active) setLoadError(getErrorMessage(error, "Unable to load template."));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
   }, [isCreate, templateId]);
 
-  const isInUse = template?.usageStatus === "in_use";
+  const initialData = useMemo(
+    () => template ? mapTemplateToForm(template) : undefined,
+    [template],
+  );
 
-  // Quay lại danh sách hoặc trang chi tiết
+  useEffect(() => {
+    setActions([]);
+    return () => setActions([]);
+  }, [setActions]);
+
   const handleCancel = () => {
-    if (isEdit && templateId) {
-      navigate(`/sources/templates/${templateId}`);
-      return;
-    }
-
-    navigate("/sources/templates");
+    if (isEdit && templateId) navigate(`/sources/templates/${templateId}`);
+    else navigate("/sources/templates");
   };
 
-  // Chuyển sang trang chỉnh sửa
   const handleEdit = () => {
-    if (!templateId) return;
-
-    if (isInUse) {
-      message.warning("Không thể chỉnh sửa bản mẫu đang sử dụng");
-      return;
-    }
-
-    navigate(`/sources/templates/${templateId}/edit`);
+    message.warning("The backend does not expose whether this template is in use. Editing is disabled to preserve the SRS rule.");
   };
 
-  // Thêm hoặc cập nhật bản mẫu
-  const handleSave = (data: TemplateFormData) => {
+  const handleSave = async (data: TemplateFormData) => {
     try {
-      if (isCreate) {
-        saveStoredSourceTemplate(data);
-
-        message.success("Thêm bản mẫu thành công");
-        navigate("/sources/templates");
+      if (!isCreate) {
+        // The UI keeps this route guarded because no usage-state contract exists.
+        if (!template || !templateId) throw new Error("Template data is unavailable.");
+        const payload = buildTemplateUpsertRequest(
+          data,
+          template.organizationId,
+          template.facilityId,
+          sources,
+        );
+        await templateApi.update(templateId, payload);
+        message.success("Template updated by the server.");
+        navigate(`/sources/templates/${templateId}`);
         return;
       }
 
-      if (isEdit && templateId) {
-        saveStoredSourceTemplate(data, templateId);
-
-        message.success("Cập nhật bản mẫu thành công");
-        navigate(`/sources/templates/${templateId}`);
+      const user = await authApi.getMe();
+      const organizationId = user.organizationId ?? selectedFacility?.organizationId;
+      const facilityId = selectedFacilityId ?? user.facilityId;
+      if (!organizationId || !facilityId) {
+        throw new Error("Select an organization and facility before creating a template.");
       }
-    } catch (error) {
-      message.error(
-        error instanceof Error
-          ? error.message
-          : isCreate
-            ? "Không thể lưu bản mẫu"
-            : "Không thể cập nhật bản mẫu",
-      );
-    }
-  };
-
-  // Xóa bản mẫu
-  const handleDelete = () => {
-    if (!templateId) return;
-
-    try {
-      deleteStoredSourceTemplates([templateId]);
-
-      setDeleteOpen(false);
-      message.success("Xóa bản mẫu thành công");
-
+      const payload = buildTemplateUpsertRequest(data, organizationId, facilityId, sources);
+      await templateApi.create(payload);
+      message.success("Template created by the server.");
       navigate("/sources/templates");
     } catch (error) {
-      message.error(
-        error instanceof Error ? error.message : "Không thể xóa bản mẫu",
-      );
+      message.error(getErrorMessage(error, isCreate ? "Unable to create template." : "Unable to update template."));
     }
   };
 
-  // ActionPanel:
-  // - Không hiển thị khi thêm mới
-  // - Không cho xóa bản mẫu đang sử dụng
-  // - Tab Bản tin sử dụng tự quản lý ActionPanel
-  useEffect(() => {
-    if (!template || isInUse || (isView && activeTab === "news")) {
-      setActions([]);
-      return;
-    }
-
-    setActions([
-      {
-        key: "delete",
-        icon: <Trash2 />,
-        tooltip: "Xóa bản mẫu",
-        danger: true,
-        onClick: () => setDeleteOpen(true),
-      },
-    ]);
-
-    return () => {
-      setActions([]);
-    };
-  }, [setActions, template, isInUse, isView, activeTab]);
-
-  // Không tìm thấy bản mẫu
+  if (loading) return <Spin />;
+  if (loadError) {
+    return (
+      <div className="source-template-detail__not-found">
+        <Alert type="error" showIcon message={loadError} />
+        <AppButton variant="outline" onClick={() => navigate("/sources/templates")}>Back to templates</AppButton>
+      </div>
+    );
+  }
   if (!isCreate && !template) {
     return (
       <div className="source-template-detail__not-found">
-        <Empty description="Không tìm thấy bản mẫu">
-          <AppButton
-            variant="outline"
-            onClick={() => navigate("/sources/templates")}>
-            Quay lại
-          </AppButton>
+        <Empty description="Template not found">
+          <AppButton variant="outline" onClick={() => navigate("/sources/templates")}>Back to templates</AppButton>
         </Empty>
       </div>
     );
   }
 
-  // Không cho chỉnh sửa bản mẫu đang sử dụng
-  if (isEdit && isInUse) {
+  if (isEdit) {
     return (
       <div className="source-template-detail__not-found">
-        <Empty description="Không thể chỉnh sửa bản mẫu đang sử dụng">
-          <AppButton
-            variant="outline"
-            onClick={() => navigate(`/sources/templates/${templateId}`)}>
-            Quay lại
-          </AppButton>
-        </Empty>
+        <Alert
+          type="warning"
+          showIcon
+          message="Editing is unavailable because the backend does not expose template usage state, and the SRS prohibits editing a used template."
+        />
+        <AppButton variant="outline" onClick={() => navigate(`/sources/templates/${templateId}`)}>Back to details</AppButton>
       </div>
     );
   }
 
   return (
     <div className="source-template-detail">
-      {/* Tab chỉ hiển thị khi xem chi tiết */}
+      {sourceError && <Alert type="error" showIcon message={sourceError} />}
+      {isCreate && !selectedFacilityId && (
+        <Alert type="warning" showIcon message="Choose a facility before saving this template." />
+      )}
       {isView && (
         <AppTabs
           className="source-template-detail__tabs"
           activeKey={activeTab}
           onChange={(key) => setActiveTab(key as DetailTab)}
           items={[
-            {
-              key: "information",
-              label: "Thông tin bản mẫu",
-            },
-            {
-              key: "news",
-              label: "Bản tin sử dụng",
-            },
+            { key: "information", label: "Template information" },
+            { key: "news", label: "Usage" },
           ]}
         />
       )}
-
-      {/* Form thêm / sửa / xem chi tiết */}
       {(!isView || activeTab === "information") && (
         <TemplateForm
           mode={mode}
-          sources={sourceTemplateSourcesMock}
-          initialData={template}
+          sources={sources}
+          initialData={initialData}
           onCancel={handleCancel}
           onSave={handleSave}
           onEdit={handleEdit}
+          canEdit={false}
         />
       )}
-
-      {/* Tab bản tin sử dụng */}
-      {isView && activeTab === "news" && template && (
-        <TemplateUsedNews
-          templateId={template.id}
-          loadNews={createSourceTemplateUsedNewsMock}
-          deleteNews={deleteSourceTemplateUsedNews}
-          filterOptions={filterOptions}
-        />
+      {isView && activeTab === "news" && (
+        <Empty description="The backend does not expose template usage records." />
       )}
-
-      {/* Modal xác nhận xóa */}
-      <AppConfirmModal
-        open={deleteOpen}
-        type="delete"
-        title="Xóa bản mẫu"
-        description={`Bạn có chắc chắn muốn xóa bản mẫu "${template?.name ?? ""}" không?`}
-        confirmText="Xóa"
-        cancelText="Hủy"
-        onConfirm={handleDelete}
-        onCancel={() => setDeleteOpen(false)}
-      />
     </div>
   );
 }

@@ -100,11 +100,11 @@ function TemplateSourcePicker({
                 aria-label={`${selected ? "Bỏ chọn" : "Chọn"} ${source.name}`}
                 aria-pressed={selected}>
                 <div className="template-source-picker__thumbnail">
-                  <img
-                    src={source.thumbnail}
-                    alt={source.name}
-                    loading="lazy"
-                  />
+                  {source.thumbnail ? (
+                    <img src={source.thumbnail} alt={source.name} loading="lazy" />
+                  ) : (
+                    <span aria-hidden="true">{source.type.toUpperCase()}</span>
+                  )}
                 </div>
 
                 <div className="template-source-picker__info">

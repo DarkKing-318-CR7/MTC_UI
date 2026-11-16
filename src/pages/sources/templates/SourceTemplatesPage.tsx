@@ -1,21 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Key } from "react";
-import { message } from "antd";
+import { Alert, message, Spin } from "antd";
 import { Plus, Trash2 } from "lucide-react";
+import axios from "axios";
 import { useNavigate } from "react-router-dom";
 
 import TemplateList from "../../../components/templates/TemplateList";
 import SourceNavigationTabs from "../components/SourceNavigationTabs";
-import AppConfirmModal from "../../../components/common/AppConfirmModal";
-
 import { useActionPanel } from "../../../contexts/ActionPanelContext";
-
-import {
-  getAllSourceTemplates,
-  deleteStoredSourceTemplates,
-} from "./data/sourceTemplateStorage";
-
-import type { SourceTemplate } from "./types/sourceTemplate.types";
+import { useFacilityContext } from "../../../contexts/FacilityContext";
+import { authApi } from "../../../api/authApi";
+import { templateApi } from "../../../api/templateApi";
+import { mapTemplateListItem } from "./data/sourceTemplateApiMapper";
+import type { SourceTemplateListItem } from "./data/sourceTemplateApiMapper";
 
 interface SourceTemplatesPageProps {
   selectedRowKeys?: Key[];
@@ -26,18 +23,17 @@ interface SourceTemplatesPageProps {
   onDeleteComplete?: () => void;
 }
 
-function loadSourceTemplates(): SourceTemplate[] {
-  return getAllSourceTemplates().map((template) => ({
-    id: template.id,
-    name: template.name,
-    aspectRatio:
-      template.screenWidth && template.screenHeight
-        ? `${template.screenWidth} x ${template.screenHeight}`
-        : "-",
-    createdAt: template.createdAt,
-    createdBy: template.createdBy,
-    usageStatus: template.usageStatus,
-  }));
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 401) return "Your session has expired. Sign in and retry.";
+    if (status === 403) return "Your role or organization/facility scope cannot access templates.";
+    if (status === 404) return "The requested template was not found.";
+    if (status === 409) return "The template changed on the server. Refresh and retry.";
+    const body = error.response?.data as { message?: string; detail?: string } | undefined;
+    return body?.message || body?.detail || error.message || "Unable to load templates.";
+  }
+  return error instanceof Error ? error.message : "Unable to load templates.";
 }
 
 function SourceTemplatesPage({
@@ -50,185 +46,105 @@ function SourceTemplatesPage({
 }: SourceTemplatesPageProps) {
   const navigate = useNavigate();
   const { setActions } = useActionPanel();
-
-  const [templates, setTemplates] =
-    useState<SourceTemplate[]>(loadSourceTemplates);
-
-  const [internalSelectedRowKeys, setInternalSelectedRowKeys] = useState<Key[]>(
-    [],
-  );
-
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { selectedFacilityId, selectedFacility, loading: facilitiesLoading } = useFacilityContext();
+  const [templates, setTemplates] = useState<SourceTemplateListItem[]>([]);
+  const [internalSelectedRowKeys, setInternalSelectedRowKeys] = useState<Key[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [scopeReady, setScopeReady] = useState(false);
 
   const selectedRowKeys = controlledSelectedRowKeys ?? internalSelectedRowKeys;
+  const setSelection = useCallback((keys: Key[]) => {
+    onSelectionChange ? onSelectionChange(keys) : setInternalSelectedRowKeys(keys);
+  }, [onSelectionChange]);
 
-  const handleSelectionChange = useCallback(
-    (keys: Key[]) => {
-      if (onSelectionChange) {
-        onSelectionChange(keys);
-      } else {
-        setInternalSelectedRowKeys(keys);
-      }
-    },
-    [onSelectionChange],
-  );
-
-  const handledDeleteRequestRef = useRef(deleteRequestId);
-
-  // Làm mới danh sách bản mẫu
-  useEffect(() => {
-    const handleTemplatesChanged = () => {
-      setTemplates(loadSourceTemplates());
-    };
-
-    window.addEventListener(
-      "mtc-source-templates-changed",
-      handleTemplatesChanged,
-    );
-
-    window.addEventListener("focus", handleTemplatesChanged);
-
-    return () => {
-      window.removeEventListener(
-        "mtc-source-templates-changed",
-        handleTemplatesChanged,
-      );
-
-      window.removeEventListener("focus", handleTemplatesChanged);
-    };
-  }, []);
-
-  // Chỉ cho phép xóa bản mẫu chưa sử dụng
-  const selectedTemplates = templates.filter((template) =>
-    selectedRowKeys.includes(template.id),
-  );
-
-  const deletableTemplates = selectedTemplates.filter(
-    (template) => template.usageStatus !== "in_use",
-  );
-
-  const inUseCount = selectedTemplates.length - deletableTemplates.length;
-
-  // Thực hiện xóa bản mẫu
-  const handleDelete = useCallback(() => {
-    if (deletableTemplates.length === 0) {
-      message.warning("Không có bản mẫu hợp lệ để xóa");
-      setDeleteOpen(false);
-      return;
-    }
-
+  const refreshTemplates = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
     try {
-      deleteStoredSourceTemplates(
-        deletableTemplates.map((template) => template.id),
-      );
-
-      setTemplates(loadSourceTemplates());
-      handleSelectionChange([]);
-      setDeleteOpen(false);
-
-      message.success(`Đã xóa ${deletableTemplates.length} bản mẫu thành công`);
+      const user = await authApi.getMe();
+      const organizationId = user.organizationId ?? selectedFacility?.organizationId;
+      if (!organizationId) throw new Error("Select an organization and facility before loading templates.");
+      const facilityId = selectedFacilityId ?? user.facilityId ?? undefined;
+      const rows = await templateApi.getAll(organizationId, facilityId ?? undefined);
+      setTemplates(rows.map(mapTemplateListItem));
+      setScopeReady(Boolean(facilityId));
     } catch (error) {
-      message.error(
-        error instanceof Error ? error.message : "Không thể xóa bản mẫu",
-      );
+      setTemplates([]);
+      setLoadError(getErrorMessage(error));
+      setScopeReady(false);
+    } finally {
+      setLoading(false);
     }
-  }, [deletableTemplates, handleSelectionChange]);
+  }, [selectedFacility?.organizationId, selectedFacilityId]);
 
-  // ActionPanel: Thêm và xóa bản mẫu
+  useEffect(() => { void refreshTemplates(); }, [refreshTemplates]);
+
   useEffect(() => {
     setActions([
       {
         key: "add-source-template",
         icon: <Plus />,
-        tooltip: "Thêm bản mẫu",
+        tooltip: "Add template",
         onClick: () => navigate("/sources/templates/create"),
       },
       {
         key: "delete-source-template",
         icon: <Trash2 />,
-        tooltip: "Xóa bản mẫu",
+        tooltip: "Deletion is unavailable until the backend exposes template usage state",
         danger: true,
-        disabled: deletableTemplates.length === 0,
-        onClick: () => setDeleteOpen(true),
+        disabled: selectedRowKeys.length === 0,
+        onClick: () => message.warning("The backend does not expose whether a template is in use. Deletion is disabled to preserve the SRS rule."),
       },
     ]);
+    return () => setActions([]);
+  }, [navigate, selectedRowKeys.length, setActions]);
 
-    return () => {
-      setActions([]);
-    };
-  }, [setActions, navigate, deletableTemplates.length]);
-
-  // Xử lý yêu cầu xóa từ component cha
-  useEffect(() => {
-    if (deleteRequestId === handledDeleteRequestRef.current) {
-      return;
-    }
-
-    handledDeleteRequestRef.current = deleteRequestId;
-
-    if (deletableTemplates.length > 0) {
-      setDeleteOpen(true);
-    } else {
-      onDeleteComplete?.();
-    }
-  }, [deleteRequestId, deletableTemplates.length, onDeleteComplete]);
-
-  // Điều hướng khi có yêu cầu thêm từ component cha
   useEffect(() => {
     if (!openCreate) return;
-
     onCloseCreate?.();
     navigate("/sources/templates/create");
   }, [openCreate, onCloseCreate, navigate]);
 
-  const handleEdit = (id: string) => {
-    const template = templates.find((item) => item.id === id);
+  useEffect(() => {
+    if (!deleteRequestId) return;
+    onDeleteComplete?.();
+    message.warning("The backend does not expose whether a template is in use. Deletion is disabled to preserve the SRS rule.");
+  }, [deleteRequestId, onDeleteComplete]);
 
-    if (template?.usageStatus === "in_use") {
-      message.warning("Không thể chỉnh sửa bản mẫu đang sử dụng");
-      return;
-    }
-
-    navigate(`/sources/templates/${id}/edit`);
-  };
-
-  const handleDetail = (id: string) => {
-    navigate(`/sources/templates/${id}`);
+  const handleEdit = () => {
+    message.warning("The backend does not expose whether a template is in use. Editing is disabled to preserve the SRS rule.");
   };
 
   return (
     <>
       <SourceNavigationTabs />
-      <TemplateList
-        templates={templates}
-        selectedRowKeys={selectedRowKeys}
-        onSelectionChange={handleSelectionChange}
-        onEdit={handleEdit}
-        onDetail={handleDetail}
-        showUsageStatus
-        pageSize={10}
-      />
-
-      <AppConfirmModal
-        open={deleteOpen}
-        type="delete"
-        title="Xóa bản mẫu"
-        description={
-          inUseCount > 0
-            ? `Bạn có chắc chắn muốn xóa ${deletableTemplates.length} bản mẫu chưa sử dụng? Có ${inUseCount} bản mẫu đang sử dụng sẽ được giữ lại.`
-            : `Bạn có chắc chắn muốn xóa ${deletableTemplates.length} bản mẫu đã chọn không?`
-        }
-        confirmText="Xóa"
-        cancelText="Hủy"
-        onConfirm={() => {
-          handleDelete();
-          onDeleteComplete?.();
-        }}
-        onCancel={() => {
-          setDeleteOpen(false);
-          onDeleteComplete?.();
-        }}
-      />
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          message={loadError}
+          action={<button type="button" onClick={() => void refreshTemplates()}>Retry</button>}
+        />
+      )}
+      {facilitiesLoading && !scopeReady ? <Spin /> : null}
+      {!loadError && loading ? <Spin /> : null}
+      {!loading && !loadError && !scopeReady && (
+        <Alert type="warning" showIcon message="Choose a facility to create templates." />
+      )}
+      {!loadError && !loading && (
+        <TemplateList
+          templates={templates}
+          selectedRowKeys={selectedRowKeys}
+          onSelectionChange={setSelection}
+          onEdit={handleEdit}
+          onDetail={(id) => navigate(`/sources/templates/${id}`)}
+          showUsageStatus={false}
+          showActivationStatus
+          pageSize={10}
+          canEdit={() => false}
+        />
+      )}
     </>
   );
 }

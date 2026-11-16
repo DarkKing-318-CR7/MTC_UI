@@ -32,6 +32,21 @@
   font-weight: 700;
 }
 
+.template-form__creator {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -6px 0 16px;
+  color: #666666;
+  font-size: 13px;
+}
+
+.template-form__creator strong {
+  color: #333333;
+  font-weight: 600;
+  text-align: right;
+}
+
 .template-form__fields {
   flex-shrink: 0;
 }
